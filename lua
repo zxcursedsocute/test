@@ -1,8 +1,7 @@
 local MAX_STAMINA = 100
 local RUN_DRAIN = 10
 local REGEN_RATE = 20
-local UPDATE_RATE = 0.05
-local EPSILON = 0.001 -- Для сравнения с нулём с учётом погрешности
+local UPDATE_RATE = 0.1
 
 -----------------------------------------------------
 -- Автоматическая компенсация задержки (по пингу)
@@ -61,9 +60,7 @@ local function loadSkinConfig(characterName, skinName)
     local configModule = skinFolder:FindFirstChild("Config")
     if not configModule then return nil end
 
-    local success, cfg = pcall(require, configModule)
-    if not success then return nil end
-    
+    local cfg = require(configModule)
     SkinConfigCache[characterName][skinName] = cfg
 
     return cfg
@@ -76,7 +73,7 @@ local function isRunning(characterModel, animationId)
     if not animationId then return false end
 
     local characterName = characterModel.Name
-    local skinName = characterModel:GetAttribute("SkinNameDisplay") or ""
+    local skinName = characterModel:GetAttribute("SkinNameDisplay")
 
     -- проверяем анимации скина
     local cfg = loadSkinConfig(characterName, skinName)
@@ -103,7 +100,6 @@ local function trackSurvivor(char)
     local stamina = MAX_STAMINA
     local running = false
     local animationId = ""
-    local lastStaminaCheck = tick()
 
     -- время, до которого реген заблокирован
     local regenBlockedUntil = 0
@@ -118,7 +114,7 @@ local function trackSurvivor(char)
 
             -- компенсируем задержку при переходе в бег
             if nowRunning and not running then
-                stamina = math.clamp(stamina - RUN_DRAIN * lag, 0, MAX_STAMINA)
+                stamina -= RUN_DRAIN * lag
             end
 
             -- задержка перед началом регена (1 сек после остановки)
@@ -134,40 +130,32 @@ local function trackSurvivor(char)
     -- Цикл обновления стамины
     -------------------------------------------------
     while char.Parent == SurvivorsFolder do
-        local now = tick()
-        local deltaTime = math.min(now - lastStaminaCheck, UPDATE_RATE * 2) -- Защита от больших дельт
-        lastStaminaCheck = now
-        
         task.wait(UPDATE_RATE)
 
         if running then
-            stamina = stamina - RUN_DRAIN * deltaTime
-            
-            -- Используем EPSILON для сравнения с нулём
-            if stamina <= EPSILON then
+            stamina -= RUN_DRAIN * UPDATE_RATE
+
+            -- если стамина достигла 0 → заморозка регена на 3 сек
+            if stamina <= 0 then
                 stamina = 0
                 regenBlockedUntil = tick() + 3
-                -- Принудительно останавливаем бег при нулевой стамине
-                running = false
             end
         else
             -- реген только если время вышло
             if tick() >= regenBlockedUntil then
-                stamina = stamina + REGEN_RATE * deltaTime
+                stamina += REGEN_RATE * UPDATE_RATE
             end
         end
 
         stamina = math.clamp(stamina, 0, MAX_STAMINA)
 
-        -- выводим только во время бега и если стамина менялась
+        -- выводим только во время бега
         if running then
-            -- Округляем до целого для красивого вывода
-            local displayStamina = math.floor(stamina + 0.5)
             print(
                 tostring(char:GetAttribute("Username") or "Unknown"),
                 "|", char.Name,
-                "|", string.sub(animationId, 1, 30) .. (string.len(animationId) > 30 and "..." or ""),
-                "| Stamina:", displayStamina
+                "|", animationId,
+                "| Stamina:", math.floor(stamina)
             )
         end
     end
@@ -177,11 +165,9 @@ end
 -- Запуск для уже существующих Survivors
 -----------------------------------------------------
 for _, char in ipairs(SurvivorsFolder:GetChildren()) do
-    if char:IsA("Model") then
-        task.spawn(function()
-            trackSurvivor(char)
-        end)
-    end
+    task.spawn(function()
+        trackSurvivor(char)
+    end)
 end
 
 -----------------------------------------------------
@@ -189,7 +175,5 @@ end
 -----------------------------------------------------
 SurvivorsFolder.ChildAdded:Connect(function(char)
     task.wait(0.1)
-    if char:IsA("Model") then
-        trackSurvivor(char)
-    end
+    trackSurvivor(char)
 end)
