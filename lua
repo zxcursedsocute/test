@@ -64,53 +64,83 @@ end
 local function createStaminaUI()
     local background = Drawing.new("Square")
     background.Filled = true
-    background.Color = Color3.new(1,1,1)
-    background.Thickness = 1
+    background.Color = Color3.fromRGB(40, 40, 40) -- Темно-серый фон
+    background.Thickness = 0
+    background.Transparency = 0.7
 
     local fill = Drawing.new("Square")
     fill.Filled = true
-    fill.Color = Color3.new(0,1,0)
-    fill.Thickness = 1
+    fill.Thickness = 0
+
+    local border = Drawing.new("Square")
+    border.Filled = false
+    border.Color = Color3.fromRGB(200, 200, 200)
+    border.Thickness = 1
+    border.Transparency = 0.8
 
     local text = Drawing.new("Text")
-    text.Color = Color3.new(1,1,1)
-    text.Size = 14
-    text.Center = true
+    text.Color = Color3.fromRGB(255, 255, 255)
+    text.Size = 12
+    text.Center = false
     text.Outline = true
-    text.OutlineColor = Color3.new(0,0,0)
+    text.OutlineColor = Color3.fromRGB(0, 0, 0)
 
-    return {Background = background, Fill = fill, Text = text}
+    return {
+        Background = background,
+        Fill = fill,
+        Border = border,
+        Text = text
+    }
 end
 
 local function updateStaminaUI(ui, position, stamina)
     local screenPos, onScreen = Camera:WorldToViewportPoint(position)
+    
     if onScreen then
-        ui.Background.Visible = true
-        ui.Fill.Visible = true
-        ui.Text.Visible = true
-
+        -- Рассчитываем масштаб в зависимости от расстояния
         local distance = (Camera.CFrame.Position - position).Magnitude
-        local scale = math.clamp(1 / (distance/10 + 1), 0.5, 1) -- масштаб по расстоянию
-
-        local width, height = 6*scale, 50*scale
-
-        -- белый контур
-        ui.Background.Position = Vector2.new(screenPos.X + 20*scale, screenPos.Y - height/2)
+        local distanceScale = math.clamp(50 / distance, 0.3, 1.5) -- Не слишком маленький и не слишком большой
+        
+        -- Размеры полоски
+        local width = 60 * distanceScale
+        local height = 8 * distanceScale
+        
+        -- Позиция справа от игрока
+        local offsetX = 40 * distanceScale
+        local offsetY = 0
+        
+        local x = screenPos.X + offsetX
+        local y = screenPos.Y + offsetY
+        
+        -- Фон
+        ui.Background.Position = Vector2.new(x - width/2, y - height/2)
         ui.Background.Size = Vector2.new(width, height)
-
-        -- заливка в цвет стамины
-        local fillHeight = (stamina/100)*height
-        local color = Color3.fromRGB(255*(1-stamina/100), 255*(stamina/100), 0)
-        ui.Fill.Color = color
-        ui.Fill.Position = Vector2.new(screenPos.X + 20*scale, screenPos.Y - height/2 + (height-fillHeight))
-        ui.Fill.Size = Vector2.new(width, fillHeight)
-
-        -- текст снизу
-        ui.Text.Position = Vector2.new(screenPos.X + 20*scale + width/2, screenPos.Y - height/2 + height + 10*scale)
-        ui.Text.Text = string.format("%d/%d", math.floor(stamina), MAX_STAMINA)
+        ui.Background.Visible = true
+        
+        -- Заполненная часть (цвет от зеленого к красному)
+        local fillWidth = (stamina/100) * (width - 2) -- -2 для отступов от краев
+        local r = math.floor(255 * (1 - stamina/100))
+        local g = math.floor(255 * (stamina/100))
+        local b = 0
+        
+        ui.Fill.Color = Color3.fromRGB(r, g, b)
+        ui.Fill.Position = Vector2.new(x - width/2 + 1, y - height/2 + 1)
+        ui.Fill.Size = Vector2.new(fillWidth, height - 2)
+        ui.Fill.Visible = true
+        
+        -- Граница
+        ui.Border.Position = Vector2.new(x - width/2, y - height/2)
+        ui.Border.Size = Vector2.new(width, height)
+        ui.Border.Visible = true
+        
+        -- Текст со стаминой
+        ui.Text.Position = Vector2.new(x - width/2 + 2, y + height/2 + 2)
+        ui.Text.Text = math.floor(stamina) .. "%"
+        ui.Text.Visible = true
     else
         ui.Background.Visible = false
         ui.Fill.Visible = false
+        ui.Border.Visible = false
         ui.Text.Visible = false
     end
 end
@@ -135,8 +165,7 @@ local function trackSurvivor(char)
             
             if nowRunning and not running then
                 local lag = getLagCompensation()
-                stamina -= RUN_DRAIN * lag
-                if stamina < 0 then stamina = 0 end
+                stamina = math.clamp(stamina - RUN_DRAIN * lag, 0, MAX_STAMINA)
             end
 
             if running and not nowRunning then
@@ -152,26 +181,27 @@ local function trackSurvivor(char)
             task.wait(UPDATE_RATE)
 
             if running then
-                stamina -= RUN_DRAIN * UPDATE_RATE
+                stamina = stamina - RUN_DRAIN * UPDATE_RATE
                 if stamina <= 0 then
                     stamina = 0
                     regenBlockedUntil = tick() + 3
                 end
             else
                 if tick() >= regenBlockedUntil then
-                    stamina += REGEN_RATE * UPDATE_RATE
+                    stamina = stamina + REGEN_RATE * UPDATE_RATE
                 end
             end
 
             stamina = math.clamp(stamina, 0, MAX_STAMINA)
 
-            -- смещение справа от игрока
-            local offset = Vector3.new(2, 3, 0)
+            -- смещение справа от игрока в мировых координатах
+            local offset = Vector3.new(2, 1.5, 0)
             updateStaminaUI(ui, rootPart.Position + offset, stamina)
         end
 
         ui.Background:Remove()
         ui.Fill:Remove()
+        ui.Border:Remove()
         ui.Text:Remove()
     end)
 end
