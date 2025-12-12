@@ -1,7 +1,7 @@
 local MAX_STAMINA = 100
 local RUN_DRAIN = 10
 local REGEN_RATE = 20
-local UPDATE_RATE = 0.01
+local UPDATE_RATE = 0.1
 
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
