@@ -2,7 +2,7 @@ local MAX_STAMINA = 100
 local RUN_DRAIN = 10
 local REGEN_RATE = 20
 local UPDATE_RATE = 0.1
-local REGEN_DELAY = 0.5 -- заменили с 1 на 0.5
+local REGEN_DELAY = 0.5 -- реген через 0.5 секунды после остановки бега
 
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -60,17 +60,16 @@ local function getLagCompensation()
     return math.clamp(pingSec * 0.5, 0.05, 0.40)
 end
 
+-- создаём Drawing UI для стамины
 local function createStaminaUI()
     local background = Drawing.new("Square")
-    background.Size = Vector2.new(6, 50)
-    background.Color = Color3.new(0.1,0.1,0.1)
     background.Filled = true
+    background.Color = Color3.new(1,1,1)
     background.Thickness = 1
 
     local fill = Drawing.new("Square")
-    fill.Size = Vector2.new(6,50)
-    fill.Color = Color3.new(0,1,0)
     fill.Filled = true
+    fill.Color = Color3.new(0,1,0)
     fill.Thickness = 1
 
     local text = Drawing.new("Text")
@@ -90,10 +89,24 @@ local function updateStaminaUI(ui, position, stamina)
         ui.Fill.Visible = true
         ui.Text.Visible = true
 
-        ui.Background.Position = Vector2.new(screenPos.X + 20, screenPos.Y - 25)
-        ui.Fill.Position = Vector2.new(screenPos.X + 20, screenPos.Y - 25 + (50 - (stamina/100)*50))
-        ui.Fill.Size = Vector2.new(6, (stamina/100)*50)
-        ui.Text.Position = Vector2.new(screenPos.X + 20, screenPos.Y + 30)
+        local distance = (Camera.CFrame.Position - position).Magnitude
+        local scale = math.clamp(1 / (distance/10 + 1), 0.5, 1) -- масштаб по расстоянию
+
+        local width, height = 6*scale, 50*scale
+
+        -- белый контур
+        ui.Background.Position = Vector2.new(screenPos.X + 20*scale, screenPos.Y - height/2)
+        ui.Background.Size = Vector2.new(width, height)
+
+        -- заливка в цвет стамины
+        local fillHeight = (stamina/100)*height
+        local color = Color3.fromRGB(255*(1-stamina/100), 255*(stamina/100), 0)
+        ui.Fill.Color = color
+        ui.Fill.Position = Vector2.new(screenPos.X + 20*scale, screenPos.Y - height/2 + (height-fillHeight))
+        ui.Fill.Size = Vector2.new(width, fillHeight)
+
+        -- текст снизу
+        ui.Text.Position = Vector2.new(screenPos.X + 20*scale + width/2, screenPos.Y - height/2 + height + 10*scale)
         ui.Text.Text = string.format("%d/%d", math.floor(stamina), MAX_STAMINA)
     else
         ui.Background.Visible = false
@@ -119,14 +132,17 @@ local function trackSurvivor(char)
         if id ~= animationId then
             animationId = id
             local nowRunning = isRunning(char, id)
-            local lag = getLagCompensation()
+            
             if nowRunning and not running then
+                local lag = getLagCompensation()
                 stamina -= RUN_DRAIN * lag
                 if stamina < 0 then stamina = 0 end
             end
+
             if running and not nowRunning then
                 regenBlockedUntil = tick() + REGEN_DELAY
             end
+
             running = nowRunning
         end
     end)
@@ -148,10 +164,12 @@ local function trackSurvivor(char)
             end
 
             stamina = math.clamp(stamina, 0, MAX_STAMINA)
-            updateStaminaUI(ui, rootPart.Position + Vector3.new(2,3,0), stamina)
+
+            -- смещение справа от игрока
+            local offset = Vector3.new(2, 3, 0)
+            updateStaminaUI(ui, rootPart.Position + offset, stamina)
         end
 
-        -- чистим UI при удалении персонажа
         ui.Background:Remove()
         ui.Fill:Remove()
         ui.Text:Remove()
