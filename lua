@@ -29,7 +29,7 @@ local function trackSurvivor(char)
 
         -- если только что перестал бегать — ставим задержку 1 сек
         if running and not nowRunning then
-            regenBlockedUntil = tick() + 1
+            regenBlockedUntil = tick() + 0.7
         end
 
         running = nowRunning
