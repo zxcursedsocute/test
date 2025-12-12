@@ -1,7 +1,7 @@
 local MAX_STAMINA = 100
 local RUN_DRAIN = 10
 local REGEN_RATE = 20
-local UPDATE_RATE = 0.1
+local UPDATE_RATE = 0.1 -- 0.1 сек вместо 0.01
 
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,52 +19,39 @@ local SkinConfigCache = {}
 
 local function loadSkinConfig(characterName, skinName)
     if not skinName or skinName == "" then return nil end
-
     SkinConfigCache[characterName] = SkinConfigCache[characterName] or {}
-
     if SkinConfigCache[characterName][skinName] then
         return SkinConfigCache[characterName][skinName]
     end
-
     local folder = SkinsRoot:FindFirstChild(characterName)
     if not folder then return nil end
-
     local skinFolder = folder:FindFirstChild(skinName)
     if not skinFolder then return nil end
-
     local configModule = skinFolder:FindFirstChild("Config")
     if not configModule then return nil end
-
     local cfg = require(configModule)
     SkinConfigCache[characterName][skinName] = cfg
-
     return cfg
 end
 
 local function isRunning(characterModel, animationId)
     if not animationId then return false end
-
     local characterName = characterModel.Name
     local skinName = characterModel:GetAttribute("SkinNameDisplay")
-
     local cfg = loadSkinConfig(characterName, skinName)
     if cfg and cfg.Animations and cfg.Animations.Run == animationId then
         return true
     end
-
     local defaults = DEFAULT_CHARACTER_ANIMS[characterName]
     if defaults and defaults.Run == animationId then
         return true
     end
-
     return false
 end
 
 local function getLagCompensation()
     local pingStat = stats().Network.ServerStatsItem["Data Ping"]
-    if not pingStat then
-        return 0.15
-    end
+    if not pingStat then return 0.15 end
     local pingSec = pingStat:GetValue() / 1000
     return math.clamp(pingSec * 0.5, 0.05, 0.40)
 end
@@ -77,23 +64,21 @@ local function trackSurvivor(char)
     local running = false
     local animationId = ""
     local regenBlockedUntil = 0
-    local lastAnimationTime = tick()
 
     animator.AnimationPlayed:Connect(function(track)
         local id = track.Animation.AnimationId
         if id ~= animationId then
             animationId = id
             local nowRunning = isRunning(char, id)
-            local lag = getLagCompensation()
-
-            -- компенсируем задержку по времени между переключениями
-            local dt = tick() - lastAnimationTime
-            if nowRunning then
-                stamina -= RUN_DRAIN * dt
+            
+            -- компенсируем лаг только один раз при старте бега
+            if nowRunning and not running then
+                local lag = getLagCompensation()
+                stamina -= RUN_DRAIN * lag
+                if stamina < 0 then stamina = 0 end
             end
-            lastAnimationTime = tick()
 
-            -- задержка восстановления после остановки
+            -- задержка регена при остановке
             if running and not nowRunning then
                 regenBlockedUntil = tick() + 0.5
             end
@@ -105,12 +90,8 @@ local function trackSurvivor(char)
     while char.Parent == SurvivorsFolder do
         task.wait(UPDATE_RATE)
 
-        -- каждый цикл обновляем лаг
-        local lag = getLagCompensation()
-
         if running then
-            stamina -= RUN_DRAIN * (UPDATE_RATE + lag)
-
+            stamina -= RUN_DRAIN * UPDATE_RATE
             if stamina <= 0 then
                 stamina = 0
                 regenBlockedUntil = tick() + 3
