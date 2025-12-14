@@ -2,6 +2,8 @@ local gui = loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcurseds
 
 local Window = gui.CreateWindow("CursedHub - Main  ","",'590','v 1.0')
 
+Window:SetSavePath("zxcursedsocute", "Trollge Incident Fights Reborn.json")
+
 local Discord = Window:AddTab("Info/Discord","Quests")
 
 Discord:AddParagraph("CursedHub","CursedHub is a free public script hub for Roblox")
@@ -27,6 +29,42 @@ ChooseGameTab:AddButton({
     Description = "",
     Callback = function()
         loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/Forsaken-Script/refs/heads/main/lua"))()
+        Window:Destroy()
+    end
+})
+
+ChooseGameTab:AddButton({
+    Name = "Fish it",
+    Description = "",
+    Callback = function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/Fish-It/refs/heads/main/lua"))()
+        Window:Destroy()
+    end
+})
+
+ChooseGameTab:AddButton({
+    Name = "Trollge Multiverse",
+    Description = "",
+    Callback = function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/Trollge-Multiverse/refs/heads/main/lua"))()
+        Window:Destroy()
+    end
+})
+
+ChooseGameTab:AddButton({
+    Name = "Trollge Incident Fights Reborn",
+    Description = "",
+    Callback = function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/Trollge-Incident-Fights-Reborn2-script/refs/heads/main/lua"))()
+        Window:Destroy()
+    end
+})
+
+ChooseGameTab:AddButton({
+    Name = "World Of Trollge",
+    Description = "",
+    Callback = function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/World-of-Trollge-script/refs/heads/main/lua"))()
         Window:Destroy()
     end
 })
