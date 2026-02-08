@@ -191,7 +191,7 @@ local function createUI()
     Title.Text = "Dusekkar Fix v2"
     Title.Size = UDim2.new(1, 0, 0, 25)
     Title.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-    Title.TextColor3 = Color3.white
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
     Title.Parent = Frame
     
     local function createBtn(text, order, callback)
