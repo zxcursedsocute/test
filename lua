@@ -1,167 +1,28 @@
--- Silent Aim для Forsaken (Dusekkar) - Версия 3.0
+-- Silent Aim для Plasma Beam (Dusekkar)
+-- Автоматически цепляет по ближайшей цели в зависимости от настроек
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
-local AIM_MODE = "Nearest" -- "Killer", "Survivor", "Nearest"
-local AIM_FOV = 1000 -- Угол обзора
-local SILENT_AIM_ENABLED = true
+local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
+local AIM_FOV = 1000 -- Угол обзора для поиска целей
 local PREDICTION_ENABLED = true -- Предсказание движения цели
-local PREDICTION_STRENGTH = 0.3 -- Сила предсказания (0-1)
+local PREDICTION_TIME = 0.3 -- Время предсказания в секундах
 
 -- Получаем нужные модули
-local success, Network = pcall(require, game:GetService("ReplicatedStorage").Modules.Network)
-local success2, Device = pcall(require, game:GetService("ReplicatedStorage").Modules.Device)
-local success3, Util = pcall(require, game:GetService("ReplicatedStorage").Modules.Util)
-
-if not success then Network = nil end
-if not success2 then Device = nil end
-if not success3 then Util = nil end
+local Network = require(game.ReplicatedStorage.Modules.Network)
+local Device = require(game.ReplicatedStorage.Modules.Device)
+local Util = require(game.ReplicatedStorage.Modules.Util)
 
 -- Кэшированные данные
-local lastTarget = nil
-local lastTargetVelocity = Vector3.new(0, 0, 0)
-local lastTargetTime = tick()
-local dusekkarModule = nil
-
--- Функция для предсказания позиции
-local function predictPosition(target, targetTime)
-    if not target or not target.PrimaryPart or not PREDICTION_ENABLED then
-        return target and target.PrimaryPart and target.PrimaryPart.Position
-    end
-    
-    local deltaTime = tick() - targetTime
-    if deltaTime > 1 then -- Сбрасываем если слишком старые данные
-        return target.PrimaryPart.Position
-    end
-    
-    -- Предсказываем позицию с учетом скорости
-    local predictedPos = target.PrimaryPart.Position + (lastTargetVelocity * deltaTime * PREDICTION_STRENGTH)
-    
-    -- Ограничиваем предсказание максимальной дистанцией
-    local maxPrediction = 10
-    local actualDistance = (predictedPos - target.PrimaryPart.Position).Magnitude
-    if actualDistance > maxPrediction then
-        predictedPos = target.PrimaryPart.Position + (predictedPos - target.PrimaryPart.Position).Unit * maxPrediction
-    end
-    
-    return predictedPos
-end
+local lastTargetVelocity = {}
+local lastTargetPosition = {}
+local lastTargetTime = {}
 
 -- Функция для получения ближайшей цели
 local function getBestTarget()
-    local character = LocalPlayer.Character
-    if not character or not character.PrimaryPart then 
-        return nil, nil, nil
-    end
-    
-    local camera = workspace.CurrentCamera
-    local mousePos = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-    local bestTarget = nil
-    local bestDistance = math.huge
-    local bestPosition = nil
-    local bestVelocity = Vector3.new(0, 0, 0)
-    
-    -- Получаем всех игроков
-    local allPlayers = {}
-    
-    -- Добавляем выживших
-    local survivors = workspace.Players.Survivors:GetChildren()
-    for _, survivor in ipairs(survivors) do
-        if survivor:IsA("Model") and survivor ~= character then
-            table.insert(allPlayers, {Model = survivor, Type = "Survivor"})
-        end
-    end
-    
-    -- Добавляем убийц
-    local killers = workspace.Players.Killers:GetChildren()
-    for _, killer in ipairs(killers) do
-        if killer:IsA("Model") then
-            table.insert(allPlayers, {Model = killer, Type = "Killer"})
-        end
-    end
-    
-    -- Фильтруем по режиму
-    local filteredPlayers = {}
-    for _, playerData in ipairs(allPlayers) do
-        if AIM_MODE == "Nearest" then
-            table.insert(filteredPlayers, playerData)
-        elseif AIM_MODE == "Survivor" and playerData.Type == "Survivor" then
-            table.insert(filteredPlayers, playerData)
-        elseif AIM_MODE == "Killer" and playerData.Type == "Killer" then
-            table.insert(filteredPlayers, playerData)
-        end
-    end
-    
-    for _, playerData in ipairs(filteredPlayers) do
-        local target = playerData.Model
-        if target and target.PrimaryPart then
-            local screenPoint, onScreen = camera:WorldToViewportPoint(target.PrimaryPart.Position)
-            
-            if onScreen then
-                local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
-                local distance = (mousePos - screenPos).Magnitude
-                
-                if distance <= AIM_FOV then
-                    -- Проверяем видимость через луч
-                    local origin = camera.CFrame.Position
-                    local direction = (target.PrimaryPart.Position - origin).Unit * 500
-                    
-                    local raycastParams = RaycastParams.new()
-                    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-                    raycastParams.FilterDescendantsInstances = {character}
-                    raycastParams.IgnoreWater = true
-                    
-                    local raycastResult = workspace:Raycast(origin, direction, raycastParams)
-                    
-                    local isVisible = false
-                    if raycastResult then
-                        local hitModel = raycastResult.Instance:FindFirstAncestorWhichIsA("Model")
-                        if hitModel == target then
-                            isVisible = true
-                        end
-                    else
-                        -- Если луч не попал, но цель близко - все равно считаем видимой
-                        local distanceToTarget = (target.PrimaryPart.Position - origin).Magnitude
-                        if distanceToTarget < 50 then
-                            isVisible = true
-                        end
-                    end
-                    
-                    if isVisible and distance < bestDistance then
-                        bestDistance = distance
-                        bestTarget = target
-                        bestPosition = target.PrimaryPart.Position
-                        bestVelocity = target.PrimaryPart.Velocity
-                    end
-                end
-            else
-                -- Если цель не на экране, но близко
-                local distanceToChar = (target.PrimaryPart.Position - character.PrimaryPart.Position).Magnitude
-                if distanceToChar < 100 and distanceToChar < bestDistance then
-                    bestTarget = target
-                    bestPosition = target.PrimaryPart.Position
-                    bestVelocity = target.PrimaryPart.Velocity
-                    bestDistance = distanceToChar
-                end
-            end
-        end
-    end
-    
-    -- Обновляем кэш скорости
-    if bestTarget then
-        lastTargetVelocity = bestVelocity
-        lastTargetTime = tick()
-    end
-    
-    lastTarget = bestTarget
-    return bestTarget, bestPosition, bestVelocity
-end
-
--- Функция для получения цели для Spawn Protection (учитывает радиус курсора)
-local function getTargetForSpawnProtection()
     local character = LocalPlayer.Character
     if not character or not character.PrimaryPart then return nil end
     
@@ -170,28 +31,57 @@ local function getTargetForSpawnProtection()
     local bestTarget = nil
     local bestDistance = math.huge
     
-    -- Только выжившие для Spawn Protection
+    -- Ищем выживших
     local survivors = workspace.Players.Survivors:GetChildren()
+    -- Ищем убийц
+    local killers = workspace.Players.Killers:GetChildren()
     
-    for _, survivor in ipairs(survivors) do
-        if survivor:IsA("Model") and survivor ~= character and survivor.PrimaryPart then
-            local screenPoint, onScreen = camera:WorldToViewportPoint(survivor.PrimaryPart.Position)
+    local targets = {}
+    
+    if AIM_MODE == "Killer" then
+        targets = killers
+    elseif AIM_MODE == "Survivor" then
+        targets = survivors
+    else -- Nearest
+        for _, v in ipairs(survivors) do
+            table.insert(targets, v)
+        end
+        for _, v in ipairs(killers) do
+            table.insert(targets, v)
+        end
+    end
+    
+    -- Фильтруем себя
+    for i = #targets, 1, -1 do
+        if targets[i].Name == "Dusekkar" and character.Name == "Dusekkar" then
+            table.remove(targets, i)
+        end
+    end
+    
+    for _, target in ipairs(targets) do
+        if target and target.PrimaryPart then
+            -- Проверяем, виден ли target на экране
+            local screenPoint, onScreen = camera:WorldToViewportPoint(target.PrimaryPart.Position)
             
             if onScreen then
                 local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
                 local distance = (mousePos - screenPos).Magnitude
                 
-                -- Важно: Spawn Protection требует курсор рядом с игроком
-                -- Используем меньший FOV для этой способности
-                if distance <= 300 then -- Меньший радиус для Spawn Protection
-                    -- Проверяем атрибуты как в оригинальном коде
-                    if not survivor:GetAttribute("DusekkarProtected") and 
-                       not survivor:GetAttribute("Protecting") and
-                       not survivor.PrimaryPart.Anchored then
-                        
+                -- Проверяем попадание в FOV
+                if distance <= AIM_FOV then
+                    local raycastParams = RaycastParams.new()
+                    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+                    raycastParams.FilterDescendantsInstances = {character}
+                    raycastParams.IgnoreWater = true
+                    
+                    local origin = camera.CFrame.Position
+                    local direction = (target.PrimaryPart.Position - origin).Unit * 500
+                    local raycastResult = workspace:Raycast(origin, direction, raycastParams)
+                    
+                    if raycastResult and raycastResult.Instance:IsDescendantOf(target) then
                         if distance < bestDistance then
                             bestDistance = distance
-                            bestTarget = survivor
+                            bestTarget = target
                         end
                     end
                 end
@@ -202,310 +92,282 @@ local function getTargetForSpawnProtection()
     return bestTarget
 end
 
--- Прямой перехват событий
-local function hookEvents()
-    -- Перехват удаленного вызова GetMousePosition
-    local function hookRemoteFunction(rf)
-        if rf.Name == "GetMousePosition" then
-            local oldInvoke = rf.InvokeServer
-            rf.InvokeServer = function(...)
-                if SILENT_AIM_ENABLED then
-                    local target, position, velocity = getBestTarget()
-                    if target and position then
-                        -- Предсказываем позицию
-                        local predictedPos = predictPosition(target, lastTargetTime)
-                        return predictedPos or position
-                    end
-                end
-                return oldInvoke(...)
-            end
-        end
+-- Функция для получения предсказанной позиции
+local function getPredictedPosition(target)
+    if not target or not target.PrimaryPart then return nil end
+    
+    local currentTime = tick()
+    local currentPos = target.PrimaryPart.Position
+    
+    -- Получаем скорость цели
+    local velocity = Vector3.new(0, 0, 0)
+    local humanoid = target:FindFirstChildOfClass("Humanoid")
+    local rootPart = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+    
+    if rootPart and rootPart:IsA("BasePart") then
+        velocity = rootPart.Velocity
     end
     
-    -- Перехват удаленного события DusekkarGet
-    local function hookDusekkarRemoteFunction(rf)
-        if string.find(rf.Name, "DusekkarGet") then
-            local oldInvoke = rf.InvokeServer
-            rf.InvokeServer = function(...)
-                local target = getTargetForSpawnProtection()
-                if target then
-                    return target
-                end
-                return oldInvoke(...)
-            end
-        end
+    -- Рассчитываем предсказанную позицию
+    local predictedPos = currentPos
+    if PREDICTION_ENABLED and velocity.Magnitude > 1 then
+        predictedPos = currentPos + (velocity * PREDICTION_TIME)
     end
     
-    -- Ищем все RemoteFunction и перехватываем
-    for _, descendant in pairs(game:GetDescendants()) do
-        if descendant:IsA("RemoteFunction") then
-            hookRemoteFunction(descendant)
-            hookDusekkarRemoteFunction(descendant)
-        end
-    end
+    -- Сохраняем данные для следующего кадра
+    lastTargetVelocity[target] = velocity
+    lastTargetPosition[target] = currentPos
+    lastTargetTime[target] = currentTime
     
-    -- Отслеживаем новые RemoteFunction
-    game.DescendantAdded:Connect(function(descendant)
-        if descendant:IsA("RemoteFunction") then
-            task.wait(0.1)
-            hookRemoteFunction(descendant)
-            hookDusekkarRemoteFunction(descendant)
-        end
-    end)
-    
-    print("[Silent Aim] События перехвачены")
+    return predictedPos
 end
 
--- Хук модуля Dusekkar
-local function hookDusekkarModule()
-    -- Ищем модуль Dusekkar
-    local actorsFolder = game:GetService("ReplicatedStorage").Modules.Actors
-    if not actorsFolder then return end
+-- Перехват вызова GetMousePosition
+local function hookGetMousePosition()
+    if not Network or not Network.SetConnection then return end
     
-    for _, moduleScript in pairs(actorsFolder:GetChildren()) do
-        if moduleScript.Name == "Dusekkar" then
-            local success, module = pcall(require, moduleScript)
-            if success and module and module.Abilities then
-                dusekkarModule = module
-                
-                -- Сохраняем оригинальные коллбэки
-                local originalPlasmaBeam = module.Abilities.PlasmaBeam.Callback
-                local originalSpawnProtection = module.Abilities.SpawnProtection.Callback
-                
-                -- Заменяем PlasmaBeam
-                module.Abilities.PlasmaBeam.Callback = function(self, arg)
-                    if RunService:IsClient() and SILENT_AIM_ENABLED then
-                        local target, position, velocity = getBestTarget()
-                        if target and position then
-                            local predictedPos = predictPosition(target, lastTargetTime)
-                            return originalPlasmaBeam(self, predictedPos)
-                        end
-                    end
-                    return originalPlasmaBeam(self, arg)
-                end
-                
-                -- Заменяем SpawnProtection
-                module.Abilities.SpawnProtection.Callback = function(self, arg)
-                    if RunService:IsClient() then
-                        -- Используем специальную функцию для Spawn Protection
-                        local target = getTargetForSpawnProtection()
-                        if target then
-                            -- Подменяем аргумент
-                            return originalSpawnProtection(self, {Target = target})
-                        end
-                    end
-                    return originalSpawnProtection(self, arg)
-                end
-                
-                print("[Silent Aim] Модуль Dusekkar перехвачен")
-                break
-            end
-        end
-    end
-end
-
--- Создаем визуальный маркер
-local function createVisuals()
-    local marker = Instance.new("BillboardGui")
-    marker.Name = "TargetMarker"
-    marker.Size = UDim2.new(3, 0, 3, 0)
-    marker.AlwaysOnTop = true
-    marker.Adornee = nil
-    marker.Enabled = false
-    
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 1, 0)
-    frame.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    frame.BackgroundTransparency = 0.5
-    frame.BorderSizePixel = 0
-    frame.Parent = marker
-    
-    marker.Parent = game.CoreGui
-    
-    -- Текст с информацией
-    local infoGui = Instance.new("ScreenGui")
-    infoGui.Name = "SilentAimInfo"
-    infoGui.Parent = game.CoreGui
-    
-    local infoText = Instance.new("TextLabel")
-    infoText.Size = UDim2.new(0, 300, 0, 100)
-    infoText.Position = UDim2.new(1, -310, 0, 10)
-    infoText.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    infoText.BackgroundTransparency = 0.7
-    infoText.TextColor3 = Color3.fromRGB(255, 255, 255)
-    infoText.TextSize = 14
-    infoText.Font = Enum.Font.Code
-    infoText.TextXAlignment = Enum.TextXAlignment.Left
-    infoText.TextYAlignment = Enum.TextYAlignment.Top
-    infoText.Text = "Silent Aim: Загрузка..."
-    infoText.Parent = infoGui
-    
-    -- Обновляем информацию
-    RunService.RenderStepped:Connect(function()
-        if SILENT_AIM_ENABLED and lastTarget and lastTarget.PrimaryPart then
-            marker.Adornee = lastTarget.PrimaryPart
-            marker.Enabled = true
+    -- Устанавливаем свой обработчик для GetMousePosition
+    Network:SetConnection("GetMousePosition", "REMOTE_FUNCTION", function()
+        local target = getBestTarget()
+        
+        if target and target.PrimaryPart then
+            -- Получаем предсказанную позицию цели
+            local predictedPos = getPredictedPosition(target)
             
-            local distance = (LocalPlayer.Character and LocalPlayer.Character.PrimaryPart and 
-                             (lastTarget.PrimaryPart.Position - LocalPlayer.Character.PrimaryPart.Position).Magnitude) or 0
-            
-            infoText.Text = string.format([[
-Silent Aim: ВКЛ (F1)
-Режим: %s (F2)
-Предсказание: %s (F3)
-Цель: %s
-Дистанция: %.1f
-Скорость: %.1f]], 
-                AIM_MODE,
-                PREDICTION_ENABLED and "ВКЛ" or "ВЫКЛ",
-                lastTarget.Name,
-                distance,
-                lastTargetVelocity.Magnitude)
+            -- Возвращаем предсказанную позицию цели
+            return predictedPos or target.PrimaryPart.Position
         else
-            marker.Enabled = false
-            infoText.Text = string.format([[
-Silent Aim: %s (F1)
-Режим: %s (F2)
-Предсказание: %s (F3)
-Цель: Нет]], 
-                SILENT_AIM_ENABLED and "ВКЛ" or "ВЫКЛ",
-                AIM_MODE,
-                PREDICTION_ENABLED and "ВКЛ" or "ВЫКЛ")
+            -- Если цель не найдена, возвращаем реальную позицию мыши
+            if Device:GetPlayerDevice() == "PC" then
+                return LocalPlayer:GetMouse().Hit.Position
+            else
+                -- Для мобильных устройств возвращаем позицию по центру экрана
+                local camera = workspace.CurrentCamera
+                local ray = camera:ScreenPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+                return ray.Origin + ray.Direction * 500
+            end
         end
     end)
     
-    return marker, infoText
+    -- Также перехватываем вызов DusekkarGet для Spawn Protection
+    Network:SetConnection(`{tostring(LocalPlayer)}DusekkarGet`, "REMOTE_FUNCTION", function()
+        local character = LocalPlayer.Character
+        if not character or not character.PrimaryPart then return nil end
+        
+        local camera = workspace.CurrentCamera
+        local mousePos = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+        local bestSurvivor = nil
+        local bestDistance = math.huge
+        
+        -- Ищем ближайшего выжившего для защиты
+        for _, survivor in pairs(workspace.Players.Survivors:GetChildren()) do
+            if survivor ~= character and survivor:FindFirstChild("PrimaryPart") then
+                -- Проверяем, можно ли защитить этого игрока
+                if not survivor:GetAttribute("DusekkarProtected") and 
+                   not survivor:GetAttribute("Protecting") and
+                   not survivor.PrimaryPart.Anchored then
+                    
+                    -- Проверяем расстояние и видимость
+                    local screenPoint, onScreen = camera:WorldToViewportPoint(survivor.PrimaryPart.Position)
+                    
+                    if onScreen then
+                        local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
+                        local distance = (mousePos - screenPos).Magnitude
+                        
+                        -- Увеличиваем радиус обнаружения
+                        if distance <= AIM_FOV * 1.5 then
+                            if distance < bestDistance then
+                                bestDistance = distance
+                                bestSurvivor = survivor
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        if bestSurvivor then
+            return bestSurvivor
+        end
+        
+        -- Если цель не найдена или не подходит, используем оригинальную логику
+        local closestPlayers = Util:GetClosestPlayerFromPosition(
+            character.PrimaryPart.Position,
+            {
+                ReturnTable = true,
+                MaxDistance = 100, -- Увеличиваем радиус
+                PlayerSelection = "Survivors",
+                OverrideUndetectable = true
+            }
+        )
+        
+        for _, playerData in pairs(closestPlayers) do
+            local playerChar = playerData.Player
+            if playerChar and playerChar ~= character then
+                return playerChar
+            end
+        end
+        
+        return nil
+    end)
 end
 
--- Основная инициализация
+-- Перехват вызова способности Plasma Beam
+local function hookPlasmaBeam()
+    -- Находим модуль Dusekkar
+    local dusekkarModule = nil
+    for _, module in pairs(game.ReplicatedStorage.Modules.Actors:GetChildren()) do
+        if module.Name == "Dusekkar" then
+            dusekkarModule = require(module)
+            break
+        end
+    end
+    
+    if not dusekkarModule then return end
+    
+    -- Сохраняем оригинальный Callback
+    local originalCallback = dusekkarModule.Abilities.PlasmaBeam.Callback
+    
+    -- Заменяем Callback
+    dusekkarModule.Abilities.PlasmaBeam.Callback = function(arg1, arg2)
+        if RunService:IsClient() then
+            -- На клиенте проверяем, есть ли цель для атаки
+            local target = getBestTarget()
+            if target and target.PrimaryPart then
+                -- Получаем предсказанную позицию цели
+                local predictedPos = getPredictedPosition(target)
+                
+                -- Передаем предсказанную позицию мыши для сервера
+                local fakeMousePos = predictedPos or target.PrimaryPart.Position
+                
+                -- Вызываем оригинальный Callback с фейковой позицией
+                return originalCallback(arg1, fakeMousePos)
+            end
+        end
+        
+        -- Если цель не найдена, используем оригинальную логику
+        return originalCallback(arg1, arg2)
+    end
+end
+
+-- Функция для переключения режимов
+local function setAimMode(mode)
+    AIM_MODE = mode
+    print("[Silent Aim] Режим изменен на:", mode)
+end
+
+-- Функция для переключения предсказания
+local function setPrediction(enabled, time)
+    PREDICTION_ENABLED = enabled
+    PREDICTION_TIME = time or 0.3
+    print("[Silent Aim] Предсказание:", enabled and "Вкл" or "Выкл", "Время:", PREDICTION_TIME)
+end
+
+-- Создаем интерфейс для управления
+local function createUI()
+    if not RunService:IsClient() then return end
+    
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "SilentAimUI"
+    ScreenGui.Parent = LocalPlayer.PlayerGui
+    
+    local Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(0, 250, 0, 220)
+    Frame.Position = UDim2.new(0, 10, 0, 10)
+    Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    Frame.BackgroundTransparency = 0.5
+    Frame.Parent = ScreenGui
+    
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, 0, 0, 30)
+    Title.Text = "Silent Aim - Dusekkar"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    Title.Parent = Frame
+    
+    -- Кнопки выбора режима
+    local modes = {"Killer", "Survivor", "Nearest"}
+    local buttons = {}
+    
+    for i, mode in ipairs(modes) do
+        local Button = Instance.new("TextButton")
+        Button.Size = UDim2.new(0.9, 0, 0, 30)
+        Button.Position = UDim2.new(0.05, 0, 0, 35 + (i-1)*35)
+        Button.Text = mode
+        Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Button.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+        Button.Parent = Frame
+        
+        Button.MouseButton1Click:Connect(function()
+            setAimMode(mode)
+            for _, btn in pairs(buttons) do
+                btn.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+            end
+            Button.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+        end)
+        
+        table.insert(buttons, Button)
+        
+        if mode == AIM_MODE then
+            Button.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+        end
+    end
+    
+    -- Кнопка предсказания
+    local PredictionButton = Instance.new("TextButton")
+    PredictionButton.Size = UDim2.new(0.9, 0, 0, 30)
+    PredictionButton.Position = UDim2.new(0.05, 0, 0, 140)
+    PredictionButton.Text = "Предсказание: " .. (PREDICTION_ENABLED and "Вкл" or "Выкл")
+    PredictionButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    PredictionButton.BackgroundColor3 = PREDICTION_ENABLED and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+    PredictionButton.Parent = Frame
+    
+    PredictionButton.MouseButton1Click:Connect(function()
+        setPrediction(not PREDICTION_ENABLED, PREDICTION_TIME)
+        PredictionButton.Text = "Предсказание: " .. (PREDICTION_ENABLED and "Вкл" or "Выкл")
+        PredictionButton.BackgroundColor3 = PREDICTION_ENABLED and Color3.fromRGB(0, 120, 0) or Color3.fromRGB(120, 0, 0)
+    end)
+    
+    -- Надпись
+    local InfoLabel = Instance.new("TextLabel")
+    InfoLabel.Size = UDim2.new(0.9, 0, 0, 40)
+    InfoLabel.Position = UDim2.new(0.05, 0, 0, 175)
+    InfoLabel.Text = "Увеличена дальность и предсказание движения"
+    InfoLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    InfoLabel.BackgroundTransparency = 1
+    InfoLabel.TextSize = 12
+    InfoLabel.TextWrapped = true
+    InfoLabel.Parent = Frame
+end
+
+-- Основная функция инициализации
 local function initialize()
     if not LocalPlayer.Character then
         LocalPlayer.CharacterAdded:Wait()
     end
     
-    task.wait(2) -- Ждем загрузку
+    wait(3) -- Ждем загрузку игры
     
     -- Устанавливаем хуки
-    hookEvents()
-    hookDusekkarModule()
+    hookGetMousePosition()
+    hookPlasmaBeam()
     
-    -- Создаем визуализацию
-    createVisuals()
+    -- Создаем интерфейс
+    pcall(createUI)
     
-    print("[Silent Aim] Инициализирован")
-    print("[Silent Aim] Режим:", AIM_MODE)
-    print("[Silent Aim] Предсказание:", PREDICTION_ENABLED and "ВКЛ" or "ВЫКЛ")
-    
-    -- Горячие клавиши
-    UserInputService.InputBegan:Connect(function(input, processed)
-        if not processed then
-            if input.KeyCode == Enum.KeyCode.F1 then
-                SILENT_AIM_ENABLED = not SILENT_AIM_ENABLED
-                print("[Silent Aim] " .. (SILENT_AIM_ENABLED and "Включен" or "Выключен"))
-            elseif input.KeyCode == Enum.KeyCode.F2 then
-                -- Меняем режим
-                if AIM_MODE == "Killer" then
-                    AIM_MODE = "Survivor"
-                elseif AIM_MODE == "Survivor" then
-                    AIM_MODE = "Nearest"
-                else
-                    AIM_MODE = "Killer"
-                end
-                print("[Silent Aim] Режим изменен на:", AIM_MODE)
-            elseif input.KeyCode == Enum.KeyCode.F3 then
-                PREDICTION_ENABLED = not PREDICTION_ENABLED
-                print("[Silent Aim] Предсказание:", PREDICTION_ENABLED and "ВКЛ" or "ВЫКЛ")
-            elseif input.KeyCode == Enum.KeyCode.F4 then
-                -- Тестовый выстрел
-                if SILENT_AIM_ENABLED then
-                    local target, position, velocity = getBestTarget()
-                    if target then
-                        print("[Тест] Цель:", target.Name, "Позиция:", position, "Скорость:", velocity.Magnitude)
-                    end
-                end
-            end
-        end
-    end)
+    print("[Silent Aim] Инициализирован для Dusekkar")
+    print("[Silent Aim] Текущий режим:", AIM_MODE)
+    print("[Silent Aim] Предсказание:", PREDICTION_ENABLED and "Вкл" or "Выкл")
 end
 
--- Отслеживаем смену персонажа
-local function onCharacterAdded(character)
-    task.wait(1)
-    if character.Name == "Dusekkar" then
-        print("[Silent Aim] Обнаружен Dusekkar, инициализация...")
+-- Запускаем при загрузке персонажа
+LocalPlayer.CharacterAdded:Connect(function()
+    if LocalPlayer.Character.Name == "Dusekkar" then
         initialize()
-    end
-end
-
-LocalPlayer.CharacterAdded:Connect(onCharacterAdded)
-
--- Если уже играем за Dusekkar
-if LocalPlayer.Character and LocalPlayer.Character.Name == "Dusekkar" then
-    task.spawn(function()
-        task.wait(1)
-        print("[Silent Aim] Обнаружен Dusekkar, инициализация...")
-        initialize()
-    end)
-end
-
--- Функция для работы на телефоне
-local function setupMobileSupport()
-    if Device and Device:GetPlayerDevice() == "Mobile" then
-        print("[Silent Aim] Обнаружено мобильное устройство")
-        
-        -- Создаем кнопки для мобильного управления
-        local screenGui = Instance.new("ScreenGui")
-        screenGui.Name = "MobileSilentAimUI"
-        screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-        
-        -- Кнопка включения/выключения
-        local toggleBtn = Instance.new("TextButton")
-        toggleBtn.Size = UDim2.new(0, 100, 0, 50)
-        toggleBtn.Position = UDim2.new(1, -110, 0, 10)
-        toggleBtn.Text = "Aim: ON"
-        toggleBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-        toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        toggleBtn.Parent = screenGui
-        
-        toggleBtn.MouseButton1Click:Connect(function()
-            SILENT_AIM_ENABLED = not SILENT_AIM_ENABLED
-            toggleBtn.Text = "Aim: " .. (SILENT_AIM_ENABLED and "ON" or "OFF")
-            toggleBtn.BackgroundColor3 = SILENT_AIM_ENABLED and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
-        end)
-        
-        -- Кнопка смены режима
-        local modeBtn = Instance.new("TextButton")
-        modeBtn.Size = UDim2.new(0, 100, 0, 50)
-        modeBtn.Position = UDim2.new(1, -110, 0, 70)
-        modeBtn.Text = "Mode: " .. AIM_MODE
-        modeBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
-        modeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        modeBtn.Parent = screenGui
-        
-        modeBtn.MouseButton1Click:Connect(function()
-            if AIM_MODE == "Killer" then
-                AIM_MODE = "Survivor"
-            elseif AIM_MODE == "Survivor" then
-                AIM_MODE = "Nearest"
-            else
-                AIM_MODE = "Killer"
-            end
-            modeBtn.Text = "Mode: " .. AIM_MODE
-        end)
-    end
-end
-
--- Инициализация для мобильных устройств
-task.spawn(function()
-    task.wait(3)
-    if Device then
-        setupMobileSupport()
     end
 end)
 
-print("[Silent Aim] Скрипт загружен. Ожидание Dusekkar...")
-print("[Silent Aim] Горячие клавиши:")
-print("  F1 - Вкл/Выкл Silent Aim")
-print("  F2 - Сменить режим (Killer/Survivor/Nearest)")
-print("  F3 - Вкл/Выкл предсказание движения")
-print("  F4 - Тестовая информация о цели")
+-- Если уже играем за Dusekkar
+if LocalPlayer.Character and LocalPlayer.Character.Name == "Dusekkar" then
+    initialize()
+end
