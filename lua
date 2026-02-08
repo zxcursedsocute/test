@@ -3,7 +3,7 @@ local gui = loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcurseds
 local windows = gui.CreateWindow("Forsaken script", "By zxc76945",'590','v 1.0')
 
 local SurvivorCombatSection = windows:AddTab('Visual','Visual')
--- === НАСТРОЙКИ (Добавь в начало или используй существующие) ===
+-- === НАСТРОЙКИ ===
 if not ForsakenSettings then
     getgenv().ForsakenSettings = {
         SilentAimEnabled = false,
@@ -17,14 +17,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- === ЛОГИКА ПОИСКА ЦЕЛИ ===
+-- === ПОИСК ЦЕЛИ (AIM LOGIC) ===
 local function GetBestTarget()
     local ClosestDist = math.huge
     local Target = nil
-    
     local PotentialTargets = {}
     
-    -- Сбор целей
     local function addTargets(folderName)
         local folder = workspace.Players:FindFirstChild(folderName)
         if folder then
@@ -46,81 +44,104 @@ local function GetBestTarget()
     for _, char in pairs(PotentialTargets) do
         if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
             local RootPart = char.HumanoidRootPart
-            -- Дистанция от персонажа до цели
             local Dist = (LocalPlayer.Character.HumanoidRootPart.Position - RootPart.Position).Magnitude
             
-            -- Можно добавить проверку на экран, если нужно, но для Plasma Beam важнее дистанция в мире
             if Dist < ForsakenSettings.SilentAimFOV and Dist < ClosestDist then
                 ClosestDist = Dist
                 Target = RootPart
             end
         end
     end
-    
     return Target
 end
 
--- === ПЕРЕХВАТ (HOOK) ===
--- Ищем RemoteFunction в папке Network. Обычно он называется "RemoteFunction" или "RF".
-local NetworkModule = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Network")
-local TargetRemoteFunc = NetworkModule:FindFirstChildOfClass("RemoteFunction")
+-- === ВЗЛОМ СЕТИ (HOOKING) ===
 
-if TargetRemoteFunc then
-    -- Сохраняем оригинальную функцию (если она была)
-    local OldOnClientInvoke = TargetRemoteFunc.OnClientInvoke
+local function HookNetwork()
+    local NetworkModule = ReplicatedStorage:WaitForChild("Modules"):FindFirstChild("Network")
+    local RemoteFunc = NetworkModule and NetworkModule:FindFirstChild("RemoteFunction")
     
-    -- Переопределяем функцию ответа
-    TargetRemoteFunc.OnClientInvoke = function(...)
-        local args = {...}
-        
-        -- Выводим в консоль (F9), чтобы проверить, работает ли хук вообще
-        -- Если в консоли появится этот принт при выстреле, значит хук работает!
-        -- print("[SilentAim Debug] Server asked for:", args[1])
+    if not RemoteFunc then return warn("Silent Aim: RemoteFunction not found!") end
 
-        -- Проверка запроса от сервера (строка 441 в серверном скрипте)
-        if args[1] == "GetMousePosition" and ForsakenSettings.SilentAimEnabled then
-            local TargetPart = GetBestTarget()
-            if TargetPart then
-                -- Возвращаем позицию врага вместо курсора
-                return TargetPart.Position
+    -- МЕТОД 1: Ищем таблицу обработчиков внутри модуля Network (Самый надежный)
+    -- Мы пытаемся найти таблицу, где хранятся функции типа "GetMousePosition"
+    local NetworkLib = require(NetworkModule)
+    local HandlersTable = nil
+    
+    -- Сканируем функции модуля, чтобы найти спрятанную таблицу (upvalues)
+    for k, v in pairs(NetworkLib) do
+        if type(v) == "function" then
+            local ups = debug.getupvalues(v)
+            for _, up in pairs(ups) do
+                if type(up) == "table" then
+                    -- Проверяем, похожа ли таблица на список ивентов
+                    -- "GetMousePosition" используется сервером [cite: 1, 20]
+                    if up["GetMousePosition"] or up[tostring(LocalPlayer).."DusekkarGet"] then
+                        HandlersTable = up
+                        break
+                    end
+                end
             end
         end
-        
-        -- Если это другой запрос или цель не найдена
-        if OldOnClientInvoke then
-            return OldOnClientInvoke(...)
-        end
-        
-        -- Стандартное поведение (если оригинала не было)
-        if args[1] == "GetMousePosition" then
-            local mouse = LocalPlayer:GetMouse()
-            return mouse.Hit.Position
-        end
-        
-        return nil
+        if HandlersTable then break end
     end
-    
-    -- Уведомление для тебя
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Silent Aim";
-        Text = "Hooked successfully!";
-        Duration = 5;
-    })
-else
-    warn("НЕ НАЙДЕН RemoteFunction в Modules.Network! Silent Aim не будет работать.")
+
+    if HandlersTable and HandlersTable["GetMousePosition"] then
+        -- Мы нашли внутреннюю функцию! Подменяем её.
+        local OldHandler = HandlersTable["GetMousePosition"]
+        
+        HandlersTable["GetMousePosition"] = function(...)
+            if ForsakenSettings.SilentAimEnabled then
+                local Target = GetBestTarget()
+                if Target then
+                    -- Возвращаем позицию врага вместо мышки
+                    return Target.Position
+                end
+            end
+            return OldHandler(...)
+        end
+        
+        print("Silent Aim: Hooked via Network Module Table!")
+        return -- Успех, выходим
+    end
+
+    -- МЕТОД 2: Используем getcallbackvalue (Если поддерживает чит)
+    -- Это сработает, если первый метод не нашел таблицу
+    if getcallbackvalue then
+        local OldCallback = getcallbackvalue(RemoteFunc)
+        if OldCallback then
+            RemoteFunc.OnClientInvoke = function(...)
+                local args = {...}
+                if args[1] == "GetMousePosition" and ForsakenSettings.SilentAimEnabled then
+                    local Target = GetBestTarget()
+                    if Target then return Target.Position end
+                end
+                return OldCallback(...)
+            end
+            print("Silent Aim: Hooked via getcallbackvalue!")
+            return
+        end
+    end
+
+    warn("Silent Aim: Failed to hook. Your executor might be too weak.")
 end
 
--- === UI (Добавь в свою таблицу) ===
-local SilentAimToggle = SurvivorCombatSection:AddToggle({
-    Name = 'Dusekkar Silent Aim',
-    Description = 'Redirects Plasma Beam to nearest target',
+-- Запускаем хук
+HookNetwork()
+
+-- === UI ЭЛЕМЕНТЫ ===
+SurvivorCombatSection:AddToggle({
+    Name = 'Plasma Beam Silent Aim',
+    Description = 'Redirects beam to nearest target',
     Callback = function(state)
         ForsakenSettings.SilentAimEnabled = state
+        -- Повторная попытка хука при включении, если вдруг слетел
+        if state then HookNetwork() end 
     end
 })
 
-local TargetDropdown = SurvivorCombatSection:AddDropdown({
-    Name = "Silent Aim Target",
+SurvivorCombatSection:AddDropdown({
+    Name = "Target Selection",
     Description = '',
     Options = {"Survivors", "Killers"},
     Default = "Survivors",
