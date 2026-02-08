@@ -1,3 +1,9 @@
+local gui = loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/.1/refs/heads/main/test%20ne%20lib"))()
+
+local windows = gui.CreateWindow("Forsaken script", "By zxc76945",'590','v 1.0')
+
+local SurvivorCombatSection = windows:AddTab('Combat','Aim')
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Player = Players.LocalPlayer
@@ -5,6 +11,10 @@ local Player = Players.LocalPlayer
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
 local AIM_TECHNIQUE = "PC and Mobile" -- "PC", "PC and Mobile"
+
+-- Настройки предсказания
+local PREDICTION_ENABLED = true
+local PREDICTION_SPEED = 0 -- Множитель для предсказания (0 = нет предсказания, 1 = полное предсказание)
 
 -- ID анимаций Plasma Beam для отслеживания
 local PLASMA_BEAM_ANIM_IDS = {
@@ -19,7 +29,13 @@ local state = {
     renderSteppedConnection = nil,
     plasmaBeamAnimConnection = nil,
     isUsingPlasmaBeam = false,
-    currentAnimationTrack = nil
+    currentAnimationTrack = nil,
+    
+    -- Для предсказания движения
+    targetHistory = {},
+    maxHistorySize = 10,
+    lastTargetPosition = nil,
+    lastTargetTime = nil
 }
 
 -- Переменная для определения устройства
@@ -93,6 +109,50 @@ local function getBestTarget()
     return bestTarget
 end
 
+-- Функция для расчета предсказанной позиции цели
+local function getPredictedPosition(target, cameraPosition)
+    if not target or not target.PrimaryPart then return nil end
+    
+    local currentPos = target.PrimaryPart.Position
+    
+    -- Если предсказание выключено, возвращаем текущую позицию
+    if not PREDICTION_ENABLED or PREDICTION_SPEED <= 0 then
+        return currentPos
+    end
+    
+    -- Получаем скорость цели
+    local velocity = Vector3.new(0, 0, 0)
+    
+    -- Попробуем получить скорость из нескольких источников
+    if target.PrimaryPart:IsA("BasePart") then
+        velocity = target.PrimaryPart.Velocity
+    end
+    
+    local humanoid = target:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.MoveDirection then
+        -- Учитываем направление движения от Humanoid
+        local moveDir = humanoid.MoveDirection
+        local humanoidSpeed = humanoid.WalkSpeed
+        velocity = velocity + (moveDir * humanoidSpeed)
+    end
+    
+    -- Рассчитываем время полета луча (расстояние / скорость)
+    local distance = (currentPos - cameraPosition).Magnitude
+    local beamSpeed = 500 -- Предполагаемая скорость луча Plasma Beam
+    local timeToTarget = distance / beamSpeed
+    
+    -- Добавляем предсказание на основе скорости и времени полета
+    local predictedPos = currentPos + (velocity * timeToTarget * PREDICTION_SPEED)
+    
+    -- Также учитываем гравитацию, если цель в воздухе
+    if target.PrimaryPart.Velocity.Y < 0 then
+        -- Если цель падает, немного опускаем предсказание
+        predictedPos = predictedPos + Vector3.new(0, -2 * PREDICTION_SPEED, 0)
+    end
+    
+    return predictedPos
+end
+
 -- Функция для поворота камеры и персонажа на цель
 local function aimAtTarget(target)
     if not target or not target.PrimaryPart then return end
@@ -105,14 +165,21 @@ local function aimAtTarget(target)
     
     local camera = workspace.CurrentCamera
     
+    -- Получаем предсказанную позицию цели
+    local predictedPos = getPredictedPosition(target, camera.CFrame.Position)
+    if not predictedPos then return end
+    
+    -- Небольшое смещение вверх, чтобы целиться в центр тела, а не в ноги
+    local targetPos = predictedPos + Vector3.new(0, 1.5, 0)
+    
     -- Поворачиваем камеру на цель
-    camera.CFrame = CFrame.new(camera.CFrame.Position, target.PrimaryPart.Position)
+    camera.CFrame = CFrame.new(camera.CFrame.Position, targetPos)
     
     -- Поворачиваем HumanoidRootPart на цель (для мобильных устройств)
     hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(
-        target.PrimaryPart.Position.X,
+        targetPos.X,
         hrp.Position.Y,
-        target.PrimaryPart.Position.Z
+        targetPos.Z
     ))
 end
 
@@ -218,30 +285,20 @@ local function hookGetMousePosition()
     
     -- Устанавливаем свой обработчик для GetMousePosition (только на PC)
     Network:SetConnection("GetMousePosition", "REMOTE_FUNCTION", function()
-        -- Для режима PC - всегда хук мыши
-        if AIM_TECHNIQUE == "PC" then
-            local target = getBestTarget()
-            
-            if target and target.PrimaryPart then
-                return target.PrimaryPart.Position
-            else
-                return Player:GetMouse().Hit.Position
-            end
-        end
+        local target = getBestTarget()
         
-        -- Для режима PC and Mobile на PC
-        if AIM_TECHNIQUE == "PC and Mobile" then
-            local target = getBestTarget()
-            
-            if target and target.PrimaryPart then
-                return target.PrimaryPart.Position
+        if target and target.PrimaryPart then
+            -- Получаем предсказанную позицию цели
+            local predictedPos = getPredictedPosition(target, workspace.CurrentCamera.CFrame.Position)
+            if predictedPos then
+                return predictedPos
             else
-                return Player:GetMouse().Hit.Position
+                return target.PrimaryPart.Position
             end
+        else
+            -- Если цель не найдена, возвращаем реальную позицию мыши
+            return Player:GetMouse().Hit.Position
         end
-        
-        -- Если режим не определен, возвращаем реальную позицию мыши
-        return Player:GetMouse().Hit.Position
     end)
 end
 
@@ -266,6 +323,7 @@ local function initializeForCharacter(character)
         print("[Silent Aim] Техника:", AIM_TECHNIQUE)
         print("[Silent Aim] Устройство:", isMobile and "Mobile" or "PC")
         print("[Silent Aim] Хук мыши:", isMobile and "Отключен" or "Включен")
+        print("[Silent Aim] Предсказание:", PREDICTION_ENABLED and "Включено (сила: "..PREDICTION_SPEED..")" or "Отключено")
     else
         -- Если сменили персонажа, останавливаем цикл
         stopAimLoop()
@@ -308,24 +366,45 @@ local function toggleSilentAim(enable)
     end
 end
 
--- Функция для изменения режима техники
-local function setAimTechnique(technique)
-    if technique ~= "PC" and technique ~= "PC and Mobile" then
-        print("[Silent Aim] Неверная техника. Используйте 'PC' или 'PC and Mobile'")
-        return
+local DusekkarToggle2 = SurvivorCombatSection:AddToggle({
+    Name = 'Plasma Beam Aim',
+    Description = '',
+    Callback = function(state)
+       toggleSilentAim(state)
     end
-    
-    AIM_TECHNIQUE = technique
-    print("[Silent Aim] Техника изменена на:", technique)
-    
-    -- Останавливаем старый цикл
-    stopAimLoop()
-    
-    -- Переинициализируем если скрипт включен
-    if state.enabled and Player.Character and Player.Character.Name == "Dusekkar" then
-        initializeForCharacter(Player.Character)
-    end
-end
+})
 
--- Включаем по умолчанию
-toggleSilentAim(true)
+SurvivorCombatSection:AddSlider({
+    Name = 'Prediction',
+    Description = '',
+    Min = 0,
+    Max = 1,
+    Default = 0.2,
+    Callback = function(value)
+       PREDICTION_SPEED = value
+    end
+})
+
+SurvivorCombatSection:AddDropdown({
+    Name = 'Aim Target',
+    Description = '',
+    Options = {'Killer', 'Survivor', 'Nearest'},
+    Callback = function(option)
+        AIM_MODE = option
+    end
+})
+
+SurvivorCombatSection:AddDropdown({
+    Name = 'Aim Mode',
+    Description = '',
+    Options = {'PC', 'PC and Mobile'},
+    Callback = function(option)
+        AIM_TECHNIQUE = option
+
+        stopAimLoop()
+        
+        if state.enabled and Player.Character and Player.Character.Name == "Dusekkar" then
+            initializeForCharacter(Player.Character)
+        end
+    end
+})
