@@ -1,10 +1,22 @@
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
+local AIM_TECHNIQUE = "PC and Mobile" -- "PC", "PC and Mobile"
 local silentAimEnabled = false
 local characterAddedConnection = nil
+
+-- ID анимаций Plasma Beam для отслеживания
+local PLASMA_BEAM_ANIM_IDS = {
+    "77894750279891",
+    "118933622288262"
+}
+
+-- Переменные для отслеживания анимации
+local plasmaBeamAnimConnection = nil
+local isUsingPlasmaBeam = false
 
 -- Функция для получения ближайшей цели
 local function getBestTarget()
@@ -74,6 +86,74 @@ local function getBestTarget()
     return bestTarget
 end
 
+-- Функция для поворота камеры и персонажа на цель
+local function aimAtTarget(target)
+    if not target or not target.PrimaryPart then return end
+    
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local camera = workspace.CurrentCamera
+    
+    -- Поворачиваем камеру на цель
+    camera.CFrame = CFrame.new(camera.CFrame.Position, target.PrimaryPart.Position)
+    
+    -- Поворачиваем HumanoidRootPart на цель (для мобильных устройств)
+    hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(
+        target.PrimaryPart.Position.X,
+        hrp.Position.Y,
+        target.PrimaryPart.Position.Z
+    ))
+end
+
+-- Функция отслеживания анимаций Plasma Beam
+local function setupPlasmaBeamTracking(character)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if not humanoid then return end
+    
+    -- Отключаем старый connection если есть
+    if plasmaBeamAnimConnection then
+        plasmaBeamAnimConnection:Disconnect()
+        plasmaBeamAnimConnection = nil
+    end
+    
+    -- Находим аниматор
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then return end
+    
+    -- Отслеживаем воспроизведение анимаций
+    plasmaBeamAnimConnection = animator.AnimationPlayed:Connect(function(track)
+        -- Получаем ID анимации
+        local animationId = track.Animation.AnimationId
+        local animIdString = tostring(animationId)
+        
+        -- Ищем ID в нашем списке
+        for _, id in ipairs(PLASMA_BEAM_ANIM_IDS) do
+            if animIdString:find(id) then
+                -- Начинаем цель, если включен режим PC and Mobile
+                if AIM_TECHNIQUE == "PC and Mobile" and silentAimEnabled then
+                    isUsingPlasmaBeam = true
+                    
+                    -- Целимся в ближайшую цель
+                    local target = getBestTarget()
+                    if target then
+                        aimAtTarget(target)
+                    end
+                    
+                    -- Отслеживаем завершение анимации
+                    track.Stopped:Once(function()
+                        isUsingPlasmaBeam = false
+                    end)
+                end
+                break
+            end
+        end
+    end)
+end
+
 -- Перехват вызова GetMousePosition
 local function hookGetMousePosition()
     local Network = require(game.ReplicatedStorage.Modules.Network)
@@ -83,6 +163,15 @@ local function hookGetMousePosition()
     
     -- Устанавливаем свой обработчик для GetMousePosition
     Network:SetConnection("GetMousePosition", "REMOTE_FUNCTION", function()
+        -- Если включен режим PC and Mobile и используется Plasma Beam, 
+        -- то возвращаем позицию мыши (камеры уже направлена на цель)
+        if AIM_TECHNIQUE == "PC and Mobile" and isUsingPlasmaBeam then
+            local camera = workspace.CurrentCamera
+            local ray = camera:ScreenPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+            return ray.Origin + ray.Direction * 500
+        end
+        
+        -- Для режима PC или когда не используется Plasma Beam - стандартная логика
         local target = getBestTarget()
         
         if target and target.PrimaryPart then
@@ -106,9 +195,17 @@ end
 local function initializeForCharacter(character)
     if character.Name == "Dusekkar" then
         wait(1) -- Ждем загрузку
+        
         hookGetMousePosition()
+        
+        -- Настраиваем отслеживание анимаций для режима PC and Mobile
+        if AIM_TECHNIQUE == "PC and Mobile" then
+            setupPlasmaBeamTracking(character)
+        end
+        
         print("[Silent Aim] Инициализирован для Dusekkar")
         print("[Silent Aim] Текущий режим:", AIM_MODE)
+        print("[Silent Aim] Техника:", AIM_TECHNIQUE)
     end
 end
 
@@ -130,12 +227,37 @@ local function toggleSilentAim(enable)
         end
     else
         print("[Silent Aim] Выключен")
+        isUsingPlasmaBeam = false
         
         -- Отключаем соединение
         if characterAddedConnection then
             characterAddedConnection:Disconnect()
             characterAddedConnection = nil
         end
+        
+        -- Отключаем отслеживание анимаций
+        if plasmaBeamAnimConnection then
+            plasmaBeamAnimConnection:Disconnect()
+            plasmaBeamAnimConnection = nil
+        end
     end
 end
+
+-- Функция для изменения режима техники
+local function setAimTechnique(technique)
+    if technique ~= "PC" and technique ~= "PC and Mobile" then
+        print("[Silent Aim] Неверная техника. Используйте 'PC' или 'PC and Mobile'")
+        return
+    end
+    
+    AIM_TECHNIQUE = technique
+    print("[Silent Aim] Техника изменена на:", technique)
+    
+    -- Переинициализируем если скрипт включен
+    if silentAimEnabled and LocalPlayer.Character and LocalPlayer.Character.Name == "Dusekkar" then
+        initializeForCharacter(LocalPlayer.Character)
+    end
+end
+
+-- Включаем по умолчанию
 toggleSilentAim(true)
