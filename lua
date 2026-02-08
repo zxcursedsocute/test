@@ -3,10 +3,13 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
-
+local silentAimEnabled = true
+local characterAddedConnection = nil
 
 -- Функция для получения ближайшей цели
 local function getBestTarget()
+    if not silentAimEnabled then return nil end
+    
     local character = LocalPlayer.Character
     if not character or not character.PrimaryPart then return nil end
     
@@ -75,7 +78,7 @@ end
 local function hookGetMousePosition()
     local Network = require(game.ReplicatedStorage.Modules.Network)
     local Device = require(game.ReplicatedStorage.Modules.Device)
-    
+
     if not Network or not Network.SetConnection then return end
     
     -- Устанавливаем свой обработчик для GetMousePosition
@@ -98,30 +101,40 @@ local function hookGetMousePosition()
         end
     end)
 end
--- Основная функция инициализации
-local function initialize()
-    if not LocalPlayer.Character then
-        LocalPlayer.CharacterAdded:Wait()
+
+-- Инициализация при загрузке персонажа Dusekkar
+local function initializeForCharacter(character)
+    if character.Name == "Dusekkar" then
+        wait(1) -- Ждем загрузку
+        hookGetMousePosition()
+        print("[Silent Aim] Инициализирован для Dusekkar")
+        print("[Silent Aim] Текущий режим:", AIM_MODE)
     end
-    
-    wait(3) -- Ждем загрузку игры
-    
-    -- Устанавливаем хуки
-    hookGetMousePosition()
-    --hookPlasmaBeam()
-    
-    print("[Silent Aim] Инициализирован для Dusekkar")
-    print("[Silent Aim] Текущий режим:", AIM_MODE)
 end
 
--- Запускаем при загрузке персонажа
-LocalPlayer.CharacterAdded:Connect(function()
-    if LocalPlayer.Character.Name == "Dusekkar" then
-        initialize()
+-- Функция включения/выключения Silent Aim
+local function toggleSilentAim(enable)
+    silentAimEnabled = enable
+    
+    if enable then
+        print("[Silent Aim] Включен")
+        
+        -- Устанавливаем соединение при изменении персонажа
+        if not characterAddedConnection then
+            characterAddedConnection = LocalPlayer.CharacterAdded:Connect(initializeForCharacter)
+        end
+        
+        -- Если персонаж уже есть, инициализируем
+        if LocalPlayer.Character then
+            initializeForCharacter(LocalPlayer.Character)
+        end
+    else
+        print("[Silent Aim] Выключен")
+        
+        -- Отключаем соединение
+        if characterAddedConnection then
+            characterAddedConnection:Disconnect()
+            characterAddedConnection = nil
+        end
     end
-end)
-
--- Если уже играем за Dusekkar
-if LocalPlayer.Character and LocalPlayer.Character.Name == "Dusekkar" then
-    initialize()
 end
