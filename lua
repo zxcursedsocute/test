@@ -1,14 +1,9 @@
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
 
--- Получаем нужные модули
-local Network = require(game.ReplicatedStorage.Modules.Network)
-local Device = require(game.ReplicatedStorage.Modules.Device)
-local Util = require(game.ReplicatedStorage.Modules.Util)
 
 -- Функция для получения ближайшей цели
 local function getBestTarget()
@@ -78,6 +73,9 @@ end
 
 -- Перехват вызова GetMousePosition
 local function hookGetMousePosition()
+    local Network = require(game.ReplicatedStorage.Modules.Network)
+    local Device = require(game.ReplicatedStorage.Modules.Device)
+    
     if not Network or not Network.SetConnection then return end
     
     -- Устанавливаем свой обработчик для GetMousePosition
@@ -100,42 +98,6 @@ local function hookGetMousePosition()
         end
     end)
 end
-
--- Перехват вызова способности Plasma Beam
-local function hookPlasmaBeam()
-    -- Находим модуль Dusekkar
-    local dusekkarModule = nil
-    for _, module in pairs(game.ReplicatedStorage.Modules.Actors:GetChildren()) do
-        if module.Name == "Dusekkar" then
-            dusekkarModule = require(module)
-            break
-        end
-    end
-    
-    if not dusekkarModule then return end
-    
-    -- Сохраняем оригинальный Callback
-    local originalCallback = dusekkarModule.Abilities.PlasmaBeam.Callback
-    
-    -- Заменяем Callback
-    dusekkarModule.Abilities.PlasmaBeam.Callback = function(arg1, arg2)
-        if RunService:IsClient() then
-            -- На клиенте проверяем, есть ли цель для атаки
-            local target = getBestTarget()
-            if target and target.PrimaryPart then
-                -- Передаем фейковую позицию мыши для сервера
-                local fakeMousePos = target.PrimaryPart.Position
-                
-                -- Вызываем оригинальный Callback с фейковой позицией
-                return originalCallback(arg1, fakeMousePos)
-            end
-        end
-        
-        -- Если цель не найдена, используем оригинальную логику
-        return originalCallback(arg1, arg2)
-    end
-end
-
 -- Основная функция инициализации
 local function initialize()
     if not LocalPlayer.Character then
