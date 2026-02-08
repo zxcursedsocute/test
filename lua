@@ -200,7 +200,7 @@ local function createUI()
         btn.Size = UDim2.new(0.9, 0, 0, 25)
         btn.Position = UDim2.new(0.05, 0, 0, 30 + (order * 30))
         btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-        btn.TextColor3 = Color3.white
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
         btn.Parent = Frame
         btn.MouseButton1Click:Connect(function()
             callback(btn)
