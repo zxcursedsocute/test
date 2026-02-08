@@ -4,7 +4,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
-local AIM_TECHNIQUE = "PC and Mobile" -- "PC", "PC and Mobile"
+local AIM_TECHNIQUE = "PC" -- "PC", "PC and Mobile"
 local silentAimEnabled = false
 local characterAddedConnection = nil
 
