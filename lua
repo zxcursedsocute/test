@@ -1,77 +1,103 @@
-local gui = loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcursedsocute/.1/refs/heads/main/test%20ne%20lib"))()
-
-local windows = gui.CreateWindow("Forsaken script", "By zxc76945",'590','v 1.0')
-
-local SurvivorCombatSection = windows:AddTab('Visual','Visual')
 -- === НАСТРОЙКИ ===
-getgenv().ForsakenSettings = getgenv().ForsakenSettings or {
+getgenv().ForsakenSettings = {
     SilentAimEnabled = true,
     SilentAimTargetMode = "Killers", -- "Survivors" или "Killers"
-    SilentAimFOV = 1000
+    SilentAimFOV = 1000, 
 }
 
 local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local Camera = workspace.CurrentCamera
 
--- === ПОИСК ЦЕЛИ ===
+-- === ФУНКЦИЯ ПОИСКА ЦЕЛИ ===
 local function GetBestTarget()
     local ClosestDist = ForsakenSettings.SilentAimFOV
-    local TargetPos = nil
+    local Target = nil
+    local folder = workspace.Players:FindFirstChild(ForsakenSettings.SilentAimTargetMode)
     
-    local targetFolder = workspace.Players:FindFirstChild(ForsakenSettings.SilentAimTargetMode)
-    if not targetFolder then return nil end
-
-    for _, char in pairs(targetFolder:GetChildren()) do
-        if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") then
-            local root = char.HumanoidRootPart
-            local dist = (LocalPlayer.Character.HumanoidRootPart.Position - root.Position).Magnitude
-            
-            if dist < ClosestDist then
-                ClosestDist = dist
-                TargetPos = root.Position
-            end
-        end
-    end
-    return TargetPos
-end
-
--- === БЕЗОПАСНЫЙ ХУК (FIX) ===
--- Мы используем метаметод __newindex, чтобы поймать момент, 
--- когда игра ПЫТАЕТСЯ установить OnClientInvoke.
-local NetworkModule = game:GetService("ReplicatedStorage").Modules.Network
-local RF = NetworkModule:FindFirstChildOfClass("RemoteFunction")
-
-if RF then
-    local oldHook
-    oldHook = hookmetamethod(game, "__newindex", function(self, index, value)
-        -- Если игра пытается назначить OnClientInvoke для нашей RemoteFunction
-        if self == RF and index == "OnClientInvoke" and type(value) == "function" then
-            local originalCallback = value
-            
-            -- Мы подменяем функцию на свою "обертку"
-            value = function(name, ...)
-                -- Если сервер спрашивает позицию мышки для Plasma Beam
-                if name == "GetMousePosition" and ForsakenSettings.SilentAimEnabled then
-                    local target = GetBestTarget()
-                    if target then
-                        return target -- Возвращаем Vector3 цели вместо мышки
+    if folder then
+        for _, char in pairs(folder:GetChildren()) do
+            if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") then
+                local root = char.HumanoidRootPart
+                local hum = char:FindFirstChild("Humanoid")
+                if hum and hum.Health > 0 then
+                    -- Проверяем, видит ли камера цель (опционально, но лучше оставить)
+                    local _, onScreen = Camera:WorldToViewportPoint(root.Position)
+                    if onScreen then
+                        local dist = (LocalPlayer.Character.HumanoidRootPart.Position - root.Position).Magnitude
+                        if dist < ClosestDist then
+                            ClosestDist = dist
+                            Target = root
+                        end
                     end
                 end
-                -- В остальных случаях возвращаем то, что хотела игра
-                return originalCallback(name, ...)
             end
         end
-        return oldHook(self, index, value)
-    end)
-    print("Silent Aim: Hook applied successfully!")
-else
-    warn("Silent Aim: RemoteFunction not found in Network module.")
+    end
+    return Target
 end
 
--- === UI (Вставь в свой Combat Section) ===
-SurvivorCombatSection:AddToggle({
-    Name = 'Plasma Beam Silent Aim',
-    Callback = function(state)
-        ForsakenSettings.SilentAimEnabled = state
+-- === ГЛАВНЫЙ ХУК ДВИЖКА ===
+local oldIndex
+oldIndex = hookmetamethod(game, "__index", function(self, index)
+    if ForsakenSettings.SilentAimEnabled and not checkcaller() then
+        local target = GetBestTarget()
+        if target then
+            -- 1. Подменяем UnitRay (Направление луча из камеры)
+            -- Это самое важное для Plasma Beam!
+            if self == Mouse and index == "UnitRay" then
+                return Ray.new(Camera.CFrame.Position, (target.Position - Camera.CFrame.Position).Unit)
+            end
+            
+            -- 2. Подменяем Hit (3D позиция)
+            if self == Mouse and index == "Hit" then
+                return target.CFrame
+            end
+            
+            -- 3. Подменяем Target (Объект под мышкой)
+            if self == Mouse and index == "Target" then
+                return target
+            end
+        end
     end
-})
+    return oldIndex(self, index)
+end)
+
+-- === ХУК ЭКРАННЫХ КООРДИНАТ (Vector2) ===
+local oldGetMouseLocation
+oldGetMouseLocation = hookfunction(UIS.GetMouseLocation, function(self)
+    if ForsakenSettings.SilentAimEnabled and not checkcaller() then
+        local target = GetBestTarget()
+        if target then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(target.Position)
+            if onScreen then
+                return Vector2.new(screenPos.X, screenPos.Y)
+            end
+        end
+    end
+    return oldGetMouseLocation(self)
+end)
+
+-- === ФИНАЛЬНЫЙ ПЕРЕХВАТ ДЛЯ NETWORK ===
+-- Перезаписываем OnClientInvoke, чтобы он возвращал Vector2 цели
+task.spawn(function()
+    local NetworkModule = game:GetService("ReplicatedStorage"):WaitForChild("Modules"):WaitForChild("Network")
+    local RF = NetworkModule:FindFirstChildOfClass("RemoteFunction")
+    
+    if RF then
+        RF.OnClientInvoke = function(name, ...)
+            if name == "GetMousePosition" and ForsakenSettings.SilentAimEnabled then
+                local target = GetBestTarget()
+                if target then
+                    local screenPos = Camera:WorldToViewportPoint(target.Position)
+                    return Vector2.new(screenPos.X, screenPos.Y)
+                end
+            end
+            return UIS:GetMouseLocation()
+        end
+    end
+end)
+
+print("!!! ULTRA SILENT AIM LOADED !!!")
