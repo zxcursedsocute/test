@@ -1,5 +1,4 @@
--- Services declaration
--- leakk by kittygd 
+
 local playersService = game:GetService("Players")
 local lightingService = game:GetService("Lighting")
 local userInputService = game:GetService("UserInputService")
