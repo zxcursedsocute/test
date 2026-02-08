@@ -1,251 +1,283 @@
--- Silent Aim для Plasma Beam (Dusekkar) + Fix Spawn Protection
--- [v2.0] Added Prediction & Anti-Cancel Hook
+-- Services declaration
+-- leakk by kittygd 
+local playersService = game:GetService("Players")
+local lightingService = game:GetService("Lighting")
+local userInputService = game:GetService("UserInputService")
+local runService = game:GetService("RunService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local materialService = game:GetService("MaterialService")
+local workspaceService = game:GetService("Workspace")
+local statsService = game:GetService("Stats")
+local debrisService = game:GetService("Debris")
+local textChatService = game:GetService("TextChatService")
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
 
--- === НАСТРОЙКИ ===
-local CONFIG = {
-    AIM_MODE = "Nearest", -- "Killer", "Survivor", "Nearest"
-    AIM_FOV = 1200,       -- Угол обзора
-    PREDICTION = 0.145,   -- Коэффициент упреждения (0.13 - 0.16 обычно идеально для стрейфов)
-    DEBUG = false         -- Показ отладочной информации в консоли
-}
+-- Client references
+local clientPlayer = playersService.LocalPlayer
+local PlayerGui = clientPlayer:WaitForChild("PlayerGui", 10)
 
--- Модули игры
-local Network = require(game.ReplicatedStorage.Modules.Network)
-local Device = require(game.ReplicatedStorage.Modules.Device)
-local Util = require(game.ReplicatedStorage.Modules.Util)
 
--- Переменные состояния
-local currentTarget = nil
+-- Load WindUI library
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
--- Функция для получения ближайшей цели
-local function getBestTarget()
-    local character = LocalPlayer.Character
-    if not character or not character.PrimaryPart then return nil end
-    
-    local camera = workspace.CurrentCamera
-    local mousePos = UserInputService:GetMouseLocation()
-    local bestTarget = nil
-    local bestDistance = math.huge
-    
-    local targets = {}
-    
-    -- Сбор целей в зависимости от режима
-    if CONFIG.AIM_MODE == "Killer" then
-        targets = workspace.Players.Killers:GetChildren()
-    elseif CONFIG.AIM_MODE == "Survivor" then
-        targets = workspace.Players.Survivors:GetChildren()
-    else
-        for _, v in ipairs(workspace.Players.Survivors:GetChildren()) do table.insert(targets, v) end
-        for _, v in ipairs(workspace.Players.Killers:GetChildren()) do table.insert(targets, v) end
-    end
-    
-    -- Фильтр: не целиться в себя
-    for i = #targets, 1, -1 do
-        if targets[i] == character then
-            table.remove(targets, i)
-        end
-    end
-    
-    for _, target in ipairs(targets) do
-        if target and target.PrimaryPart then
-            local screenPoint, onScreen = camera:WorldToViewportPoint(target.PrimaryPart.Position)
-            
-            if onScreen then
-                local screenPos = Vector2.new(screenPoint.X, screenPoint.Y)
-                local distance = (mousePos - screenPos).Magnitude
-                
-                if distance <= CONFIG.AIM_FOV then
-                    -- Проверка на препятствия (Raycast)
-                    local rayParams = RaycastParams.new()
-                    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-                    rayParams.FilterDescendantsInstances = {character}
-                    
-                    local origin = camera.CFrame.Position
-                    local direction = (target.PrimaryPart.Position - origin).Unit * 500
-                    local result = workspace:Raycast(origin, direction, rayParams)
-                    
-                    if result and result.Instance:IsDescendantOf(target) then
-                        if distance < bestDistance then
-                            bestDistance = distance
-                            bestTarget = target
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    return bestTarget
+
+-- Create main window
+local Window = WindUI:CreateWindow({
+    Title = "GlovSaken",
+    Icon = "sparkle",
+    Author = "By GlovDev",
+    Folder = "GlovSakenScript",
+    Size = UDim2.fromOffset(350, 300),
+    Transparent = false,
+    Theme = "Dark",
+    Resizable = false,
+    SideBarWidth = 150,
+    HideSearchBar = true,
+    ScrollBarEnabled = false,
+})
+
+
+-- Window toggle key
+Window:SetToggleKey(Enum.KeyCode.K)
+
+
+-- Window text font
+WindUI:SetFont("rbxasset://fonts/families/AccanthisADFStd.json")
+
+
+-- Mobile open button configuration
+Window:EditOpenButton({
+    Title = "GlovSaken",
+    Icon = "sparkle",
+    CornerRadius = UDim.new(0,16),
+    StrokeThickness = 0,
+    Color = ColorSequence.new(
+        Color3.fromHex("000000"), 
+        Color3.fromHex("000000")
+    ),
+    OnlyMobile = true,
+    Enabled = true,
+    Draggable = true,
+})
+
+
+----------------------------------------------------------------
+-- Support Tab
+----------------------------------------------------------------
+local SupportTab = Window:Tab({
+    Title = "Support",
+    Icon = "activity",
+    Locked = false,
+})
+
+
+----------------------------------------------------------------
+-- Dusekkar Section
+----------------------------------------------------------------
+local DusekkarSection = SupportTab:Section({
+    Title = "Dusekkar",
+    Opened = true,
+})
+
+
+-- Variables
+local dusekkarAimbotEnabled = false
+local dusekkarAimMode = "Survivor"
+local dusekkarAnimIds = {"77894750279891", "118933622288262"}
+local dusekkarKillerNames = {"Slasher", "c00lkidd", "JohnDoe", "1x1x1x1", "Noli", "Sixer", "Nosferatu"}
+local dusekkarHealthPenalty = 1000
+local dusekkarAiming = false
+local dusekkarHumanoid = nil
+local dusekkarAimConnection = nil
+
+
+-- Find nearest target based on mode
+local function dusekkarGetNearestTarget()
+    local lp = playersService.LocalPlayer
+    local char = lp.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+
+    local playersFolder = workspaceService:FindFirstChild("Players")
+    local survivorsFolder = playersFolder and playersFolder:FindFirstChild("Survivors")
+    local killersFolder = playersFolder and playersFolder:FindFirstChild("Killers")
+    if not survivorsFolder and not killersFolder then return nil end
+
+
+    local nearestHRP = nil
+    local bestScore = math.huge
+
+
+    if dusekkarAimMode == "Survivor" and survivorsFolder then
+        for _, survivor in ipairs(survivorsFolder:GetChildren()) do
+            if survivor:IsA("Model") and survivor ~= char and not table.find(dusekkarKillerNames, survivor.Name) then
+                local targetHRP = survivor:FindFirstChild("HumanoidRootPart")
+                local targetHum = survivor:FindFirstChildOfClass("Humanoid")
+                if targetHRP and targetHum and targetHum.Health > 0 then
+                    local distSq = (targetHRP.Position - hrp.Position).Magnitude^2
+                    local healthRatio = targetHum.Health / math.max(targetHum.MaxHealth, 1)
+                    local score = distSq + dusekkarHealthPenalty * healthRatio
+                    if score < bestScore then
+                        bestScore = score
+                        nearestHRP = targetHRP
+                    end
+                end
+            end
+        end
+    elseif dusekkarAimMode == "Killer" and killersFolder then
+        for _, killer in ipairs(killersFolder:GetChildren()) do
+            if killer:IsA("Model") and table.find(dusekkarKillerNames, killer.Name) then
+                local targetHRP = killer:FindFirstChild("HumanoidRootPart")
+                if targetHRP then
+                    local distSq = (targetHRP.Position - hrp.Position).Magnitude^2
+                    if distSq < bestScore then
+                        bestScore = distSq
+                        nearestHRP = targetHRP
+                    end
+                end
+            end
+        end
+    elseif dusekkarAimMode == "Random" then
+        local folders = {}
+        if survivorsFolder then table.insert(folders, survivorsFolder) end
+        if killersFolder then table.insert(folders, killersFolder) end
+        for _, folder in ipairs(folders) do
+            for _, model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") and model ~= char then
+                    local targetHRP = model:FindFirstChild("HumanoidRootPart")
+                    if targetHRP then
+                        local distSq = (targetHRP.Position - hrp.Position).Magnitude^2
+                        if distSq < bestScore then
+                            bestScore = distSq
+                            nearestHRP = targetHRP
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+
+    return nearestHRP
 end
 
--- Хук для блокировки отмены Spawn Protection
--- Это решает проблему прерывания способности через 1 секунду
-local function hookRemoteEvents()
-    local mt = getrawmetatable(game)
-    local oldNameCall = mt.__namecall
-    setreadonly(mt, false)
 
-    mt.__namecall = newcclosure(function(self, ...)
-        local method = getnamecallmethod()
-        local args = {...}
+-- Setup aimbot on character
+local function dusekkarSetupCharacter(char)
+    local humanoid = char:WaitForChild("Humanoid", 5)
+    if not humanoid then return end
 
-        -- Проверяем, пытается ли игра отправить сигнал отмены
-        if method == "FireServer" and tostring(self):find("DusekkarCancel") then
-            -- Если у нас есть цель, которую мы защищаем/атакуем, БЛОКИРУЕМ отмену
-            local target = getBestTarget()
-            if target then
-                if CONFIG.DEBUG then warn("[Silent Aim] Blocked DusekkarCancel packet!") end
-                return nil -- Ничего не возвращаем, пакет не уходит на сервер
-            end
-        end
 
-        return oldNameCall(self, ...)
-    end)
-    
-    setreadonly(mt, true)
+    dusekkarHumanoid = humanoid
+
+
+    if dusekkarAimConnection then
+        pcall(function() dusekkarAimConnection:Disconnect() end)
+    end
+
+
+    if dusekkarAimbotEnabled then
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            dusekkarAimConnection = animator.AnimationPlayed:Connect(function(track)
+                local animId = track.Animation.AnimationId:match("%d+")
+                if table.find(dusekkarAnimIds, animId) then
+                    task.delay(0.5, function()
+                        if dusekkarAimbotEnabled then
+                            dusekkarAiming = true
+                        end
+                    end)
+                    track.Stopped:Once(function()
+                        dusekkarAiming = false
+                    end)
+                end
+            end)
+        end
+    end
 end
 
--- Перехват сетевых функций (Network Module)
-local function hookGameNetwork()
-    -- 1. Перехват позиции для атаки (Plasma Beam)
-    Network:SetConnection("GetMousePosition", "REMOTE_FUNCTION", function()
-        local target = getBestTarget()
-        
-        if target and target.PrimaryPart then
-            -- === ДОБАВЛЕНА ПРЕДИКЦИЯ ===
-            local velocity = target.PrimaryPart.AssemblyLinearVelocity
-            local position = target.PrimaryPart.Position
-            
-            -- Расчет упреждения: Позиция + (Скорость * Коэффициент)
-            local predictedPos = position + (velocity * CONFIG.PREDICTION)
-            
-            if CONFIG.DEBUG then 
-                print(string.format("[Silent Aim] Aiming at: %s | Pred: %s", target.Name, tostring(velocity.Magnitude > 0))) 
-            end
-            
-            return predictedPos
-        else
-            -- Стандартное поведение (реальная мышь)
-            if Device:GetPlayerDevice() == "PC" then
-                return LocalPlayer:GetMouse().Hit.Position
-            else
-                local cam = workspace.CurrentCamera
-                local ray = cam:ScreenPointToRay(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
-                return ray.Origin + ray.Direction * 100
-            end
-        end
-    end)
-    
-    -- 2. Перехват выбора цели для защиты (Spawn Protection)
-    Network:SetConnection(tostring(LocalPlayer).."DusekkarGet", "REMOTE_FUNCTION", function()
-        local target = getBestTarget()
-        
-        -- Сначала пробуем взять цель из Silent Aim
-        if target and target:FindFirstChild("PrimaryPart") then
-            -- Проверки валидности для защиты
-            local canProtect = not target:GetAttribute("DusekkarProtected") 
-                           and not target:GetAttribute("Protecting")
-                           and not target.PrimaryPart.Anchored
-            
-            if canProtect then
-                return target
-            end
-        end
-        
-        -- Если Silent Aim не нашел цель, используем стандартную логику игры (чтобы не сломать механику)
-        local closest = Util:GetClosestPlayerFromPosition(
-            LocalPlayer.Character.PrimaryPart.Position,
-            {ReturnTable=true, MaxDistance=60, PlayerSelection="Survivors", OverrideUndetectable=true}
-        )
-        
-        for _, data in pairs(closest) do
-            if data.Player ~= LocalPlayer.Character then
-                return data.Player
-            end
-        end
-        return nil
-    end)
+
+-- Character handling
+if playersService.LocalPlayer.Character then
+    task.spawn(dusekkarSetupCharacter, playersService.LocalPlayer.Character)
 end
 
--- GUI
-local function createUI()
-    if game.CoreGui:FindFirstChild("DusekkarAimUI") then game.CoreGui.DusekkarAimUI:Destroy() end
-    
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "DusekkarAimUI"
-    ScreenGui.Parent = game.CoreGui -- Используем CoreGui для безопасности
-    
-    local Frame = Instance.new("Frame")
-    Frame.Size = UDim2.new(0, 150, 0, 130)
-    Frame.Position = UDim2.new(0.01, 0, 0.5, -65)
-    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    Frame.BorderSizePixel = 0
-    Frame.Parent = ScreenGui
-    
-    local Title = Instance.new("TextLabel")
-    Title.Text = "Dusekkar Fix v2"
-    Title.Size = UDim2.new(1, 0, 0, 25)
-    Title.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Title.Parent = Frame
-    
-    local function createBtn(text, order, callback)
-        local btn = Instance.new("TextButton")
-        btn.Text = text
-        btn.Size = UDim2.new(0.9, 0, 0, 25)
-        btn.Position = UDim2.new(0.05, 0, 0, 30 + (order * 30))
-        btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        btn.Parent = Frame
-        btn.MouseButton1Click:Connect(function()
-            callback(btn)
-        end)
-        return btn
-    end
-    
-    createBtn("Target: " .. CONFIG.AIM_MODE, 0, function(self)
-        if CONFIG.AIM_MODE == "Nearest" then CONFIG.AIM_MODE = "Killer"
-        elseif CONFIG.AIM_MODE == "Killer" then CONFIG.AIM_MODE = "Survivor"
-        else CONFIG.AIM_MODE = "Nearest" end
-        self.Text = "Target: " .. CONFIG.AIM_MODE
-    end)
-    
-    local predBtn = createBtn("Pred: " .. CONFIG.PREDICTION, 1, function(self)
-        CONFIG.PREDICTION = CONFIG.PREDICTION + 0.05
-        if CONFIG.PREDICTION > 0.3 then CONFIG.PREDICTION = 0.0 end
-        self.Text = "Pred: " .. string.sub(tostring(CONFIG.PREDICTION), 1, 4)
-    end)
-    
-    createBtn("Re-Init Hooks", 2, function()
-        hookGameNetwork()
-        hookRemoteEvents()
-    end)
-end
 
--- Инициализация
-local function init()
-    if not LocalPlayer.Character then LocalPlayer.CharacterAdded:Wait() end
-    
-    task.wait(1)
-    hookGameNetwork()
-    hookRemoteEvents()
-    createUI()
-    
-    print("--> Dusekkar Script Loaded: Anti-Cancel & Prediction Active <--")
-end
-
-LocalPlayer.CharacterAdded:Connect(function(char)
-    if char.Name == "Dusekkar" then
-        task.wait(2)
-        init()
-    end
+playersService.LocalPlayer.CharacterAdded:Connect(function(char)
+    task.delay(1, dusekkarSetupCharacter, char)
 end)
 
-if LocalPlayer.Character and LocalPlayer.Character.Name == "Dusekkar" then
-    init()
-end
+
+-- Main aimbot loop
+runService.RenderStepped:Connect(function()
+    if not dusekkarAimbotEnabled or not dusekkarAiming or not dusekkarHumanoid then return end
+
+
+    local targetHRP = dusekkarGetNearestTarget()
+    if targetHRP then
+        workspaceService.CurrentCamera.CFrame = CFrame.new(
+            workspaceService.CurrentCamera.CFrame.Position,
+            targetHRP.Position
+        )
+    end
+end)
+
+
+-- UI Controls
+DusekkarSection:Toggle({
+    Title = "Aim Plasma Beam",
+    Type = "Checkbox",
+    Default = false,
+    Callback = function(state)
+        dusekkarAimbotEnabled = state
+        if not state then
+            dusekkarAiming = false
+            if dusekkarAimConnection then
+                pcall(function() dusekkarAimConnection:Disconnect() end)
+                dusekkarAimConnection = nil
+            end
+        elseif playersService.LocalPlayer.Character then
+            task.spawn(dusekkarSetupCharacter, playersService.LocalPlayer.Character)
+        end
+    end
+})
+
+
+DusekkarSection:Dropdown({
+    Title = "Aim Plasma Beam Mode",
+    Values = {"Survivor", "Killer", "Random"},
+    Value = "Survivor",
+    Callback = function(value)
+        dusekkarAimMode = value
+    end
+})
+
+
+----------------------------------------------------------------
+-- Interface Tab
+----------------------------------------------------------------
+local InterfaceTab = Window:Tab({
+    Title = "Interface",
+    Icon = "scan",
+    Locked = false,
+})
+
+
+----------------------------------------------------------------
+-- UI Functions Section
+----------------------------------------------------------------
+local UIFunctionsSection = InterfaceTab:Section({ 
+    Title = "UI Functions",
+    Opened = true,
+})
+
+
+-- Close UI
+InterfaceTab:Button({
+    Title = "Close UI",
+    Locked = false,
+    Callback = function()
+        Window:Destroy()
+    end
+})
