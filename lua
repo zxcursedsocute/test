@@ -3,75 +3,54 @@ local gui = loadstring(game:HttpGet("https://raw.githubusercontent.com/zxcurseds
 local windows = gui.CreateWindow("Forsaken script", "By zxc76945",'590','v 1.0')
 
 local SurvivorCombatSection = windows:AddTab('Visual','Visual')
+-- === НАСТРОЙКИ (Добавь в начало или используй существующие) ===
 if not ForsakenSettings then
     getgenv().ForsakenSettings = {
         SilentAimEnabled = false,
         SilentAimTargetMode = "Survivors", -- "Survivors", "Killers", "All"
-        SilentAimFOV = 500, -- Радиус действия (опционально)
+        SilentAimFOV = 2000, 
     }
 end
 
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
--- UI Elements (Добавьте это в секцию SurvivorCombatSection)
-SurvivorCombatSection:AddSection('Dusekkar Silent Aim')
-
-SurvivorCombatSection:AddToggle({
-    Name = 'Enable Silent Aim (Plasma Beam)',
-    Description = 'Automatically aims the Plasma Beam at the target.',
-    Callback = function(state)
-        ForsakenSettings.SilentAimEnabled = state
-    end
-})
-
-SurvivorCombatSection:AddDropdown({
-    Name = "Target Selection",
-    Description = 'Choose who to aim at.',
-    Options = {"Survivors", "Killers", "Closest"},
-    Default = "Survivors",
-    Callback = function(value)
-        ForsakenSettings.SilentAimTargetMode = value
-    end
-})
+-- === ЛОГИКА ПОИСКА ЦЕЛИ ===
 local function GetBestTarget()
     local ClosestDist = math.huge
     local Target = nil
     
     local PotentialTargets = {}
     
-    -- Выбираем папки игроков в зависимости от настройки
+    -- Сбор целей
+    local function addTargets(folderName)
+        local folder = workspace.Players:FindFirstChild(folderName)
+        if folder then
+            for _, v in pairs(folder:GetChildren()) do table.insert(PotentialTargets, v) end
+        end
+    end
+
     if ForsakenSettings.SilentAimTargetMode == "Survivors" then
-        if workspace.Players:FindFirstChild("Survivors") then
-            for _, v in pairs(workspace.Players.Survivors:GetChildren()) do table.insert(PotentialTargets, v) end
-        end
+        addTargets("Survivors")
     elseif ForsakenSettings.SilentAimTargetMode == "Killers" then
-        if workspace.Players:FindFirstChild("Killers") then
-            for _, v in pairs(workspace.Players.Killers:GetChildren()) do table.insert(PotentialTargets, v) end
-        end
-    else -- Closest / All
-        if workspace.Players:FindFirstChild("Survivors") then
-            for _, v in pairs(workspace.Players.Survivors:GetChildren()) do table.insert(PotentialTargets, v) end
-        end
-        if workspace.Players:FindFirstChild("Killers") then
-            for _, v in pairs(workspace.Players.Killers:GetChildren()) do table.insert(PotentialTargets, v) end
-        end
+        addTargets("Killers")
+    else
+        addTargets("Survivors")
+        addTargets("Killers")
     end
 
     local MousePos = game:GetService("UserInputService"):GetMouseLocation()
     
     for _, char in pairs(PotentialTargets) do
-        -- Проверки: это не мы, персонаж жив, есть HumanoidRootPart
         if char ~= LocalPlayer.Character and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
             local RootPart = char.HumanoidRootPart
-            local ScreenPos, OnScreen = workspace.CurrentCamera:WorldToViewportPoint(RootPart.Position)
-            
-            -- Если нужна проверка на видимость (FOV) или просто дистанцию
+            -- Дистанция от персонажа до цели
             local Dist = (LocalPlayer.Character.HumanoidRootPart.Position - RootPart.Position).Magnitude
             
-            if Dist < ClosestDist then
+            -- Можно добавить проверку на экран, если нужно, но для Plasma Beam важнее дистанция в мире
+            if Dist < ForsakenSettings.SilentAimFOV and Dist < ClosestDist then
                 ClosestDist = Dist
                 Target = RootPart
             end
@@ -80,35 +59,40 @@ local function GetBestTarget()
     
     return Target
 end
-local NetworkModule = ReplicatedStorage:WaitForChild("Modules"):FindFirstChild("Network")
-local RemoteFunc = NetworkModule and NetworkModule:FindFirstChild("RemoteFunction")
 
-if RemoteFunc then
+-- === ПЕРЕХВАТ (HOOK) ===
+-- Ищем RemoteFunction в папке Network. Обычно он называется "RemoteFunction" или "RF".
+local NetworkModule = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Network")
+local TargetRemoteFunc = NetworkModule:FindFirstChildOfClass("RemoteFunction")
+
+if TargetRemoteFunc then
     -- Сохраняем оригинальную функцию (если она была)
-    local OldOnClientInvoke = RemoteFunc.OnClientInvoke
+    local OldOnClientInvoke = TargetRemoteFunc.OnClientInvoke
     
-    RemoteFunc.OnClientInvoke = function(...)
+    -- Переопределяем функцию ответа
+    TargetRemoteFunc.OnClientInvoke = function(...)
         local args = {...}
-        local key = args[1] -- Обычно первый аргумент - это название запроса (например "GetMousePosition")
         
-        -- Проверяем, включен ли чит и запрашивает ли сервер позицию мыши
-        if ForsakenSettings.SilentAimEnabled and key == "GetMousePosition" then
+        -- Выводим в консоль (F9), чтобы проверить, работает ли хук вообще
+        -- Если в консоли появится этот принт при выстреле, значит хук работает!
+        -- print("[SilentAim Debug] Server asked for:", args[1])
+
+        -- Проверка запроса от сервера (строка 441 в серверном скрипте)
+        if args[1] == "GetMousePosition" and ForsakenSettings.SilentAimEnabled then
             local TargetPart = GetBestTarget()
-            
             if TargetPart then
-                -- Возвращаем позицию врага вместо позиции мыши
-                -- Можно добавить Random Spread (разброс), если нужно, но для Plasma Beam лучше точность
+                -- Возвращаем позицию врага вместо курсора
                 return TargetPart.Position
             end
         end
         
-        -- Если это не наш запрос или цель не найдена, возвращаем оригинал или позицию мыши
+        -- Если это другой запрос или цель не найдена
         if OldOnClientInvoke then
             return OldOnClientInvoke(...)
         end
         
-        -- Фоллбэк (стандартное поведение), если оригинальной функции не было
-        if key == "GetMousePosition" then
+        -- Стандартное поведение (если оригинала не было)
+        if args[1] == "GetMousePosition" then
             local mouse = LocalPlayer:GetMouse()
             return mouse.Hit.Position
         end
@@ -116,7 +100,31 @@ if RemoteFunc then
         return nil
     end
     
-    print("Silent Aim Hooked successfully!")
+    -- Уведомление для тебя
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Silent Aim";
+        Text = "Hooked successfully!";
+        Duration = 5;
+    })
 else
-    warn("Could not find RemoteFunction in Modules.Network")
+    warn("НЕ НАЙДЕН RemoteFunction в Modules.Network! Silent Aim не будет работать.")
 end
+
+-- === UI (Добавь в свою таблицу) ===
+local SilentAimToggle = SurvivorCombatSection:AddToggle({
+    Name = 'Dusekkar Silent Aim',
+    Description = 'Redirects Plasma Beam to nearest target',
+    Callback = function(state)
+        ForsakenSettings.SilentAimEnabled = state
+    end
+})
+
+local TargetDropdown = SurvivorCombatSection:AddDropdown({
+    Name = "Silent Aim Target",
+    Description = '',
+    Options = {"Survivors", "Killers"},
+    Default = "Survivors",
+    Callback = function(value)
+        ForsakenSettings.SilentAimTargetMode = value
+    end
+})
