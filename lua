@@ -7,7 +7,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
-local AIM_FOV = 100 -- Угол обзора для поиска целей
+local AIM_FOV = 1000 -- Угол обзора для поиска целей
 
 -- Получаем нужные модули
 local Network = require(game.ReplicatedStorage.Modules.Network)
