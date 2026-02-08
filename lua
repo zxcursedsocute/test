@@ -22,6 +22,9 @@ local state = {
     currentAnimationTrack = nil
 }
 
+-- Переменная для определения устройства
+local isMobile = false
+
 -- Функция для получения ближайшей цели
 local function getBestTarget()
     if not state.enabled then return nil end
@@ -113,7 +116,7 @@ local function aimAtTarget(target)
     ))
 end
 
--- Основной цикл слежения за целью
+-- Основной цикл слежения за цель
 local function aimLoop()
     if not state.enabled then return end
     if AIM_TECHNIQUE ~= "PC and Mobile" then return end
@@ -196,40 +199,49 @@ local function stopAimLoop()
     end
 end
 
--- Перехват вызова GetMousePosition
+-- Перехват вызова GetMousePosition (только для PC)
 local function hookGetMousePosition()
     local Network = require(game.ReplicatedStorage.Modules.Network)
     local Device = require(game.ReplicatedStorage.Modules.Device)
 
     if not Network or not Network.SetConnection then return end
     
-    -- Устанавливаем свой обработчик для GetMousePosition
+    -- Определяем тип устройства
+    local deviceType = Device:GetPlayerDevice()
+    isMobile = deviceType ~= "PC"
+    
+    -- Если мы на мобильном устройстве, не хукаем позицию мыши
+    if isMobile then
+        print("[Silent Aim] На мобильном устройстве - отключен хук позиции мыши")
+        return
+    end
+    
+    -- Устанавливаем свой обработчик для GetMousePosition (только на PC)
     Network:SetConnection("GetMousePosition", "REMOTE_FUNCTION", function()
-        -- Если включен режим PC and Mobile и используется Plasma Beam, 
-        -- то возвращаем позицию по центру экрана (камера уже направлена на цель)
-        if AIM_TECHNIQUE == "PC and Mobile" and state.isUsingPlasmaBeam then
-            local camera = workspace.CurrentCamera
-            local ray = camera:ScreenPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-            return ray.Origin + ray.Direction * 500
-        end
-        
-        -- Для режима PC или когда не используется Plasma Beam - стандартная логика
-        local target = getBestTarget()
-        
-        if target and target.PrimaryPart then
-            -- Возвращаем позицию цели вместо позиции мыши
-            return target.PrimaryPart.Position
-        else
-            -- Если цель не найдена, возвращаем реальную позицию мыши
-            if Device:GetPlayerDevice() == "PC" then
-                return Player:GetMouse().Hit.Position
+        -- Для режима PC - всегда хук мыши
+        if AIM_TECHNIQUE == "PC" then
+            local target = getBestTarget()
+            
+            if target and target.PrimaryPart then
+                return target.PrimaryPart.Position
             else
-                -- Для мобильных устройств возвращаем позицию по центру экрана
-                local camera = workspace.CurrentCamera
-                local ray = camera:ScreenPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
-                return ray.Origin + ray.Direction * 500
+                return Player:GetMouse().Hit.Position
             end
         end
+        
+        -- Для режима PC and Mobile на PC
+        if AIM_TECHNIQUE == "PC and Mobile" then
+            local target = getBestTarget()
+            
+            if target and target.PrimaryPart then
+                return target.PrimaryPart.Position
+            else
+                return Player:GetMouse().Hit.Position
+            end
+        end
+        
+        -- Если режим не определен, возвращаем реальную позицию мыши
+        return Player:GetMouse().Hit.Position
     end)
 end
 
@@ -238,7 +250,10 @@ local function initializeForCharacter(character)
     if character.Name == "Dusekkar" then
         wait(1) -- Ждем загрузку
         
-        hookGetMousePosition()
+        -- Только на PC хукаем позицию мыши
+        if not isMobile then
+            hookGetMousePosition()
+        end
         
         -- Настраиваем отслеживание анимаций для режима PC and Mobile
         if AIM_TECHNIQUE == "PC and Mobile" then
@@ -249,6 +264,8 @@ local function initializeForCharacter(character)
         print("[Silent Aim] Инициализирован для Dusekkar")
         print("[Silent Aim] Текущий режим:", AIM_MODE)
         print("[Silent Aim] Техника:", AIM_TECHNIQUE)
+        print("[Silent Aim] Устройство:", isMobile and "Mobile" or "PC")
+        print("[Silent Aim] Хук мыши:", isMobile and "Отключен" or "Включен")
     else
         -- Если сменили персонажа, останавливаем цикл
         stopAimLoop()
