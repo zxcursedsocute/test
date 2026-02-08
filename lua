@@ -3,7 +3,7 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Настройки
 local AIM_MODE = "Killer" -- "Killer", "Survivor", "Nearest"
-local silentAimEnabled = true
+local silentAimEnabled = false
 local characterAddedConnection = nil
 
 -- Функция для получения ближайшей цели
@@ -138,3 +138,4 @@ local function toggleSilentAim(enable)
         end
     end
 end
+toggleSilentAim(true)
