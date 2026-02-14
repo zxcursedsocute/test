@@ -1,0 +1,144 @@
+--[[
+    1x1x1x1 Universal Aimbot (Mobile/PC support)
+    Uses hookmetamethod to detect ability usage via RemoteEvents.
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- == КОНФИГУРАЦИЯ ИЗ ТВОЕГО ФАЙЛА ==
+local AbilityStats = {
+    ["MassInfection"] = { -- Ключевое слово для поиска
+        Speed = 80,
+        Windup = 0.6
+    },
+    ["Entanglement"] = { -- Ключевое слово для поиска
+        Speed = 120,
+        Windup = 0.45
+    }
+}
+
+local Settings = {
+    FOV = 500,               -- Радиус поиска врагов
+    PredictionMult = 1.05,   -- Корректировка пинга
+    Smoothness = 0.2         -- 0.1 = очень плавно, 1 = жесткая привязка
+}
+
+-- == ПЕРЕМЕННЫЕ ==
+local IsAiming = false
+local AimEndTime = 0
+local CurrentTarget = nil
+local CurrentSpeed = 0
+local CurrentWindup = 0
+
+-- == ФУНКЦИИ ==
+
+local function IsValid(player)
+    if not player or player == LocalPlayer then return false end
+    local char = player.Character
+    if not char then return false end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local human = char:FindFirstChild("Humanoid")
+    if not root or not human or human.Health <= 0 then return false end
+    return true
+end
+
+local function GetClosestTarget()
+    local closest = nil
+    local maxDist = Settings.FOV
+    local mousePos = game:GetService("UserInputService"):GetMouseLocation()
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if IsValid(v) then
+            local root = v.Character.HumanoidRootPart
+            local pos, vis = Camera:WorldToViewportPoint(root.Position)
+            if vis then
+                local dist = (Vector2.new(mousePos.X, mousePos.Y) - Vector2.new(pos.X, pos.Y)).Magnitude
+                if dist < maxDist then
+                    maxDist = dist
+                    closest = v
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function PredictPosition(target, speed)
+    local root = target.Character.HumanoidRootPart
+    local myRoot = LocalPlayer.Character.HumanoidRootPart
+    
+    local dist = (root.Position - myRoot.Position).Magnitude
+    local timeToHit = dist / speed
+    
+    -- Учитываем текущую скорость врага
+    local velocity = root.AssemblyLinearVelocity
+    
+    -- Простая формула: Где он будет + Пинг
+    return root.Position + (velocity * timeToHit * Settings.PredictionMult)
+end
+
+-- == ХУК (ГЛАВНАЯ ЧАСТЬ) ==
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local args = {...}
+    local method = getnamecallmethod()
+
+    -- Проверяем, что это отправка данных на сервер
+    if method == "FireServer" then
+        -- Перебираем аргументы, чтобы найти название абилки
+        for _, arg in pairs(args) do
+            if type(arg) == "string" then
+                -- Ищем совпадения с нашими абилками
+                -- Используем string.find, так как название может быть сложным (например "UseMassInfection")
+                if string.find(arg, "MassInfection") then
+                    -- Активация Mass Infection
+                    CurrentTarget = GetClosestTarget()
+                    if CurrentTarget then
+                        CurrentSpeed = AbilityStats["MassInfection"].Speed
+                        CurrentWindup = AbilityStats["MassInfection"].Windup
+                        AimEndTime = tick() + CurrentWindup
+                        IsAiming = true
+                    end
+                elseif string.find(arg, "Entanglement") then
+                    -- Активация Entanglement
+                    CurrentTarget = GetClosestTarget()
+                    if CurrentTarget then
+                        CurrentSpeed = AbilityStats["Entanglement"].Speed
+                        CurrentWindup = AbilityStats["Entanglement"].Windup
+                        AimEndTime = tick() + CurrentWindup
+                        IsAiming = true
+                    end
+                end
+            end
+        end
+    end
+
+    return oldNamecall(self, ...)
+end)
+
+-- == ЦИКЛ АИМА ==
+RunService.RenderStepped:Connect(function()
+    if IsAiming and CurrentTarget and IsValid(CurrentTarget) then
+        -- Если время Windup (замаха) вышло, прекращаем аим
+        if tick() > AimEndTime then
+            IsAiming = false
+            CurrentTarget = nil
+            return
+        end
+
+        local predictedPos = PredictPosition(CurrentTarget, CurrentSpeed)
+        
+        -- Плавно наводим камеру
+        local currentCF = Camera.CFrame
+        local targetCF = CFrame.new(currentCF.Position, predictedPos)
+        
+        Camera.CFrame = currentCF:Lerp(targetCF, Settings.Smoothness)
+    else
+        IsAiming = false
+    end
+end)
+
+print("Hook Loaded! Используй абилки (кнопкой или на экране) для теста.")
