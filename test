@@ -21,7 +21,7 @@ local AbilityStats = {
 }
 
 local Settings = {
-    FOV = 500,               -- Радиус поиска врагов
+    FOV = 2000,               -- Радиус поиска врагов
     PredictionMult = 1.05,   -- Корректировка пинга
     Smoothness = 0.2         -- 0.1 = очень плавно, 1 = жесткая привязка
 }
