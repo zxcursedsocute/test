@@ -2,7 +2,7 @@
     1x1x1x1 Universal Aimbot (Module Hook Version)
     Target: 1x1x1x1 Killer Abilities (MassInfection, Entanglement)
     Fixed version with error handling
-]]
+]]--
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
