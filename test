@@ -1,40 +1,39 @@
 --[[
-    1x1x1x1 Universal Aimbot (Mobile/PC support)
-    Uses hookmetamethod to detect ability usage via RemoteEvents.
+    1x1x1x1 Universal Aimbot (Module Hook Version)
+    Target: 1x1x1x1 Killer Abilities (MassInfection, Entanglement)
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
--- == КОНФИГУРАЦИЯ ИЗ ТВОЕГО ФАЙЛА ==
+-- == КОНФИГУРАЦИЯ ==
 local AbilityStats = {
-    ["MassInfection"] = { -- Ключевое слово для поиска
+    ["MassInfection"] = { 
         Speed = 80,
         Windup = 0.6
     },
-    ["Entanglement"] = { -- Ключевое слово для поиска
+    ["Entanglement"] = { 
         Speed = 120,
         Windup = 0.45
     }
 }
 
 local Settings = {
-    FOV = 2000,               -- Радиус поиска врагов
-    PredictionMult = 1.05,   -- Корректировка пинга
-    Smoothness = 0.2         -- 0.1 = очень плавно, 1 = жесткая привязка
+    FOV = 800,              -- Увеличил, так как абилки дальние
+    PredictionMult = 1.05,
+    Smoothness = 0.2
 }
 
--- == ПЕРЕМЕННЫЕ ==
+-- == ПЕРЕМЕННЫЕ АИМА ==
 local IsAiming = false
 local AimEndTime = 0
 local CurrentTarget = nil
 local CurrentSpeed = 0
-local CurrentWindup = 0
 
--- == ФУНКЦИИ ==
-
+-- == ФУНКЦИИ ПОИСКА ==
 local function IsValid(player)
     if not player or player == LocalPlayer then return false end
     local char = player.Character
@@ -42,6 +41,9 @@ local function IsValid(player)
     local root = char:FindFirstChild("HumanoidRootPart")
     local human = char:FindFirstChild("Humanoid")
     if not root or not human or human.Health <= 0 then return false end
+    
+    -- Проверка: не целиться в других убийц (если режим 2 убийцы) или мертвых
+    -- Можно добавить проверку команд, если нужно
     return true
 end
 
@@ -67,62 +69,84 @@ local function GetClosestTarget()
 end
 
 local function PredictPosition(target, speed)
+    if not target or not target.Character then return Vector3.zero end
     local root = target.Character.HumanoidRootPart
     local myRoot = LocalPlayer.Character.HumanoidRootPart
     
     local dist = (root.Position - myRoot.Position).Magnitude
     local timeToHit = dist / speed
     
-    -- Учитываем текущую скорость врага
     local velocity = root.AssemblyLinearVelocity
-    
-    -- Простая формула: Где он будет + Пинг
     return root.Position + (velocity * timeToHit * Settings.PredictionMult)
 end
 
--- == ХУК (ГЛАВНАЯ ЧАСТЬ) ==
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local args = {...}
-    local method = getnamecallmethod()
+-- == ХУК МОДУЛЯ (GLUE LOGIC) ==
+local function InitKillerHook()
+    if getgenv().KillerHookLoaded then return end
 
-    -- Проверяем, что это отправка данных на сервер
-    if method == "FireServer" then
-        -- Перебираем аргументы, чтобы найти название абилки
-        for _, arg in pairs(args) do
-            if type(arg) == "string" then
-                -- Ищем совпадения с нашими абилками
-                -- Используем string.find, так как название может быть сложным (например "UseMassInfection")
-                if string.find(arg, "MassInfection") then
-                    -- Активация Mass Infection
+    -- ПУТЬ К МОДУЛЮ (ВАЖНО! ПРОВЕРЬ В DEX EXPLORER ЕСЛИ НЕ РАБОТАЕТ)
+    -- Обычно путь: ReplicatedStorage -> Assets -> Killers -> 1x1x1x1 -> Behavior
+    local modulePath = nil
+    
+    local success, err = pcall(function()
+        -- Пытаемся найти папку киллера. Имя может быть "1x1x1x1" или "OneByOne" или "Glitch"
+        -- Проверь точное имя папки в игре!
+        local killerFolder = ReplicatedStorage.Assets.Killers:FindFirstChild("1x1x1x1") 
+                          or ReplicatedStorage.Assets.Killers:FindFirstChild("TheGlitch")
+        
+        if killerFolder and killerFolder:FindFirstChild("Behavior") then
+            modulePath = require(killerFolder.Behavior)
+        end
+    end)
+
+    if not modulePath then
+        warn("Аимбот: Не удалось найти модуль киллера! Проверь путь в ReplicatedStorage.")
+        return
+    end
+
+    print("Аимбот: Модуль найден, устанавливаем хуки...")
+
+    -- Перебираем наши настройки и ищем соответствующие функции в модуле
+    for abilityName, stats in pairs(AbilityStats) do
+        if modulePath.Abilities and modulePath.Abilities[abilityName] then
+            local abilityTable = modulePath.Abilities[abilityName]
+            
+            -- Проверяем, есть ли Callback (функция активации)
+            if abilityTable.Callback then
+                print("Хукаем способность: " .. abilityName)
+                
+                -- Сохраняем оригинал, чтобы не зациклить
+                local oldFunc = abilityTable.Callback
+                
+                -- Ставим хук
+                hookfunction(abilityTable.Callback, function(...)
+                    print("[AIMBOT] Активация: " .. abilityName)
+                    
+                    -- Логика Аима
                     CurrentTarget = GetClosestTarget()
                     if CurrentTarget then
-                        CurrentSpeed = AbilityStats["MassInfection"].Speed
-                        CurrentWindup = AbilityStats["MassInfection"].Windup
-                        AimEndTime = tick() + CurrentWindup
+                        CurrentSpeed = stats.Speed
+                        AimEndTime = tick() + stats.Windup
                         IsAiming = true
+                        print("Цель захвачена: " .. CurrentTarget.Name)
                     end
-                elseif string.find(arg, "Entanglement") then
-                    -- Активация Entanglement
-                    CurrentTarget = GetClosestTarget()
-                    if CurrentTarget then
-                        CurrentSpeed = AbilityStats["Entanglement"].Speed
-                        CurrentWindup = AbilityStats["Entanglement"].Windup
-                        AimEndTime = tick() + CurrentWindup
-                        IsAiming = true
-                    end
-                end
+                    
+                    -- Вызываем оригинальную функцию, чтобы скилл сработал в игре
+                    return oldFunc(...)
+                end)
             end
+        else
+            warn("Способность не найдена в модуле: " .. abilityName)
         end
     end
 
-    return oldNamecall(self, ...)
-end)
+    getgenv().KillerHookLoaded = true
+    print("Аимбот: Все хуки успешно установлены!")
+end
 
--- == ЦИКЛ АИМА ==
+-- == ЦИКЛ АИМА (КАМЕРА) ==
 RunService.RenderStepped:Connect(function()
     if IsAiming and CurrentTarget and IsValid(CurrentTarget) then
-        -- Если время Windup (замаха) вышло, прекращаем аим
         if tick() > AimEndTime then
             IsAiming = false
             CurrentTarget = nil
@@ -131,7 +155,7 @@ RunService.RenderStepped:Connect(function()
 
         local predictedPos = PredictPosition(CurrentTarget, CurrentSpeed)
         
-        -- Плавно наводим камеру
+        -- Плавная наводка
         local currentCF = Camera.CFrame
         local targetCF = CFrame.new(currentCF.Position, predictedPos)
         
@@ -141,4 +165,14 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("Hook Loaded! Используй абилки (кнопкой или на экране) для теста.")
+-- Запуск хука
+-- Ждем загрузки игры
+if not game:IsLoaded() then game.Loaded:Wait() end
+InitKillerHook()
+
+-- Если киллер респавнится или модуль перезагружается, можно добавить повторную проверку:
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(2) -- Ждем пока загрузятся скрипты персонажа
+    getgenv().KillerHookLoaded = false -- Сбрасываем флаг
+    InitKillerHook()
+end)
